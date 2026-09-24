@@ -651,3 +651,63 @@ HTTP incremental
 Depois que isso estiver funcionando, integrar o endpoint `/youtubei/v1/player`.
 
 Dessa forma, problemas de áudio/streaming ficam separados dos problemas de resolução específicos do YouTube.
+
+---
+
+# Skills obrigatórias do projeto
+
+As skills globais abaixo devem ser usadas quando o trabalho corresponder ao seu escopo:
+
+## visual-components
+
+Usar ao criar ou alterar componentes visuais, regras de design, estados de UI, layouts responsivos, loading, acessibilidade ou testes de componentes.
+
+Responsabilidades:
+
+- Ler as regras visuais existentes antes de editar.
+- Definir props, eventos, estados e comportamento responsivo.
+- Registrar novas regras e componentes reutilizáveis na documentação visual do projeto.
+- Criar testes de interação, estados de loading/erro/vazio e acessibilidade.
+- Validar desktop, mobile, tema e overflow quando aplicável.
+
+## interface-flows
+
+Usar em fluxos entre Vue, Tauri, Rust, WebViews, workers, threads, áudio nativo, reloads e APIs assíncronas.
+
+Responsabilidades:
+
+- Desenhar o fluxo antes da implementação.
+- Definir fonte de verdade, contratos tipados, eventos, erros e terminal conditions.
+- Tratar startup, loading, paginação, retry, cancelamento, reload, reconnect e respostas fora de ordem.
+- Criar testes unitários de transição, testes de bridge/API e testes de integração.
+- Criar ou documentar smoke tests reais para Tauri, WebView, OAuth e áudio nativo.
+- Registrar logs com correlação sem expor tokens ou dados sensíveis.
+
+## visualizers
+
+Usar ao alterar FFT, Canvas, WebGL, espectrogramas, visualizadores de áudio, tooltips, controles ou performance de renderização.
+
+Responsabilidades:
+
+- Documentar fonte do analyzer, sample rate, bandas, cadence, smoothing e pausa.
+- Manter aquisição de áudio separada da renderização.
+- Limitar histórico, alocações e custo por frame.
+- Testar pausa, histórico, intensidade, hover, troca de visualizer e layout de background.
+- Validar stacking context, overlays, tooltips e comportamento responsivo.
+
+## youtube-api-analysis
+
+Usar ao investigar ou alterar APIs internas do YouTube Music, Innertube, WebView bridge, paginação, PlayerResponse, streams ou resolução de URLs.
+
+Responsabilidades:
+
+- Registrar endpoint, client context, payload, resposta, paginação, erros e data da observação.
+- Separar fatos observados, hipóteses, limitações e comportamento esperado.
+- Atualizar o registro de APIs e relatórios técnicos do projeto.
+- Criar fixtures sanitizadas e testes de contrato para parsers e bridges.
+- Nunca registrar cookies, tokens, assinaturas, identificadores pessoais ou URLs sensíveis.
+- Tratar interfaces internas do YouTube como instáveis e não públicas.
+
+## Regra de validação
+
+Toda alteração relevante deve informar quais testes foram executados, quais fluxos foram validados em runtime e quais limitações permaneceram. Build passando sozinho não equivale a validação funcional ou visual.

@@ -5,6 +5,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rustfft::{num_complex::Complex, FftPlanner};
 use symphonia::core::audio::{AudioBufferRef, SampleBuffer};
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -15,6 +16,9 @@ use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
 const BUFFER_LIMIT: usize = 512 * 1024;
+const LEVEL_BANDS: usize = 32;
+const FFT_SIZE: usize = 2048;
+const FFT_HOP: usize = FFT_SIZE / 2;
 
 struct DownloadBuffer {
     bytes: Mutex<Vec<u8>>,
@@ -145,15 +149,20 @@ struct PcmQueue {
 static STOP: OnceLock<Mutex<Option<Arc<AtomicBool>>>> = OnceLock::new();
 static CURRENT_URL: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static PAUSED: AtomicBool = AtomicBool::new(false);
+static ACTIVE: AtomicBool = AtomicBool::new(false);
 static VOLUME_BITS: AtomicU32 = AtomicU32::new(1.0_f32.to_bits());
 static POSITION_MICROS: AtomicU64 = AtomicU64::new(0);
 static DURATION_MICROS: AtomicU64 = AtomicU64::new(0);
+static LEVELS: OnceLock<[AtomicU32; LEVEL_BANDS]> = OnceLock::new();
+static ANALYZER_BUFFER: OnceLock<Mutex<Vec<f32>>> = OnceLock::new();
+static FFT_PLAN: OnceLock<Arc<dyn rustfft::Fft<f32>>> = OnceLock::new();
 
 pub struct AudioEngine;
 
 impl AudioEngine {
     pub fn play_url(url: String) -> Result<(), String> {
         Self::stop();
+        ACTIVE.store(true, Ordering::Release);
         *CURRENT_URL.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Audio state poisoned".to_string())? = Some(url.clone());
         PAUSED.store(false, Ordering::Release);
         POSITION_MICROS.store(0, Ordering::Release);
@@ -169,12 +178,16 @@ impl AudioEngine {
                     eprintln!("VibeDeck audio error: {error}");
                 }
             }
+            if !stop.load(Ordering::Acquire) {
+                ACTIVE.store(false, Ordering::Release);
+            }
             stop.store(true, Ordering::Release);
         });
         Ok(())
     }
 
     pub fn stop() {
+        ACTIVE.store(false, Ordering::Release);
         if let Some(state) = STOP.get() {
             if let Ok(mut current) = state.lock() {
                 if let Some(stop) = current.take() {
@@ -210,6 +223,14 @@ impl AudioEngine {
         PAUSED.store(paused, Ordering::Release);
     }
 
+    pub fn is_active() -> bool {
+        ACTIVE.load(Ordering::Acquire)
+    }
+
+    pub fn is_paused() -> bool {
+        PAUSED.load(Ordering::Acquire)
+    }
+
     pub fn set_volume(volume: f32) {
         VOLUME_BITS.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Release);
     }
@@ -220,6 +241,14 @@ impl AudioEngine {
 
     pub fn duration() -> f64 {
         DURATION_MICROS.load(Ordering::Acquire) as f64 / 1_000_000.0
+    }
+
+    pub fn levels() -> Vec<f32> {
+        LEVELS
+            .get_or_init(|| std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())))
+            .iter()
+            .map(|level| f32::from_bits(level.load(Ordering::Acquire)))
+            .collect()
     }
 }
 
@@ -517,17 +546,67 @@ fn fill_output<T: cpal::Sample + cpal::FromSample<f32>>(
     let mut samples = queue.samples.lock().expect("PCM queue poisoned");
     let paused = PAUSED.load(Ordering::Acquire);
     let volume = f32::from_bits(VOLUME_BITS.load(Ordering::Acquire));
-    for sample in data.iter_mut() {
+    let levels = LEVELS.get_or_init(|| std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())));
+    let channel_count = channels.max(1.0) as usize;
+    let mut frame_sum = 0.0_f32;
+    let mut analysis_frames = Vec::with_capacity(data.len() / channel_count.max(1));
+    for (index, sample) in data.iter_mut().enumerate() {
         let value = if paused {
             0.0
         } else {
             samples.pop_front().unwrap_or(0.0) * volume
         };
+        frame_sum += value;
+        if (index + 1) % channel_count == 0 {
+            analysis_frames.push(frame_sum / channel_count as f32);
+            frame_sum = 0.0;
+        }
         *sample = T::from_sample(value);
+    }
+    if let Ok(mut buffer) = ANALYZER_BUFFER.get_or_init(|| Mutex::new(Vec::with_capacity(FFT_SIZE * 2))).lock() {
+        buffer.extend(analysis_frames);
+        if buffer.len() >= FFT_SIZE {
+            let window = buffer[..FFT_SIZE].to_vec();
+            buffer.drain(..FFT_HOP);
+            drop(buffer);
+            update_spectrum(&window, levels);
+        }
     }
     if !paused && !stop.load(Ordering::Acquire) && sample_rate > 0.0 && channels > 0.0 {
         let advanced = data.len() as f64 / channels / sample_rate;
         POSITION_MICROS.fetch_add((advanced * 1_000_000.0) as u64, Ordering::AcqRel);
     }
     queue.changed.notify_all();
+}
+
+fn update_spectrum(samples: &[f32], levels: &[AtomicU32; LEVEL_BANDS]) {
+    let fft = FFT_PLAN.get_or_init(|| {
+        let mut planner = FftPlanner::<f32>::new();
+        planner.plan_fft_forward(FFT_SIZE)
+    });
+    let mut input = samples
+        .iter()
+        .enumerate()
+        .map(|(index, sample)| {
+            let window = 0.5 - 0.5 * (std::f32::consts::TAU * index as f32 / FFT_SIZE as f32).cos();
+            Complex::new(sample * window, 0.0)
+        })
+        .collect::<Vec<_>>();
+    fft.process(&mut input);
+
+    let nyquist = FFT_SIZE / 2;
+    let mut magnitudes = [0.0_f32; LEVEL_BANDS];
+    for (band, magnitude) in magnitudes.iter_mut().enumerate() {
+        let low = (nyquist as f32).powf(band as f32 / LEVEL_BANDS as f32) as usize;
+        let high = (nyquist as f32).powf((band + 1) as f32 / LEVEL_BANDS as f32) as usize;
+        let start = low.min(nyquist - 1);
+        let end = high.max(start + 1).min(nyquist);
+        let average = (start..end)
+            .map(|bin| input[bin].norm() / FFT_SIZE as f32)
+            .sum::<f32>() / (end - start) as f32;
+        *magnitude = (average * 14.0).sqrt().min(1.0);
+    }
+    for (index, level) in levels.iter().enumerate() {
+        level.store(magnitudes[index].to_bits(), Ordering::Release);
+    }
 }

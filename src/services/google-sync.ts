@@ -144,6 +144,18 @@ export class GoogleSyncService {
     return invoke<number>('get_audio_duration');
   }
 
+  getAudioLevels() {
+    return invoke<number[]>('get_audio_levels');
+  }
+
+  isAudioActive() {
+    return invoke<boolean>('is_audio_active');
+  }
+
+  isAudioPaused() {
+    return invoke<boolean>('is_audio_paused');
+  }
+
   seekAudio(seconds: number) {
     return invoke('seek_audio', { seconds });
   }

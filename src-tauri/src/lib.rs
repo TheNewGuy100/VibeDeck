@@ -1777,6 +1777,24 @@ fn get_audio_duration() -> f64 {
     audio::AudioEngine::duration()
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn get_audio_levels() -> Vec<f32> {
+    audio::AudioEngine::levels()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn is_audio_active() -> bool {
+    audio::AudioEngine::is_active()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn is_audio_paused() -> bool {
+    audio::AudioEngine::is_paused()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1820,7 +1838,10 @@ pub fn run() {
             set_audio_volume,
             seek_audio,
             get_audio_position,
-            get_audio_duration
+            get_audio_duration,
+            get_audio_levels,
+            is_audio_active,
+            is_audio_paused
         ])
         .run(tauri::generate_context!())
         .expect("error while running VibeDeck");
