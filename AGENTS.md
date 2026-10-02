@@ -633,6 +633,24 @@ Ainda precisamos investigar/implementar:
 
 ---
 
+# Estado atual dos visualizers
+
+Os visualizers ficam organizados em `src/visualizers/`, separados da camada geral de componentes.
+
+O Mascot visualizer usa respostas independentes para:
+
+- arco vermelho: bass/beat;
+- arco roxo: voz;
+- elementos verdes: energia/fluxo geral da música.
+
+A aproximação/afastamento em profundidade dos três arcos é compartilhada e guiada pelo envelope transitório de beat, não pelo bass contínuo. O frontend mantém smoothing baseado em tempo, ataque rápido e decay controlado, sem resposta artificial quando não há dados.
+
+O analyzer ainda é consultado pelo bridge Tauri em intervalos de aproximadamente 50 ms. Esse custo de polling permanece como limitação de latência e poderá exigir uma futura solução orientada a eventos ou buffer nativo.
+
+Testes atuais do visualizer: 6 arquivos e 18 testes passando.
+
+---
+
 # Próximo passo recomendado
 
 Implementar SOMENTE a Fase 1.
@@ -658,6 +676,18 @@ Dessa forma, problemas de áudio/streaming ficam separados dos problemas de reso
 
 As skills globais abaixo devem ser usadas quando o trabalho corresponder ao seu escopo:
 
+## Orquestracao de agentes
+
+Toda a operação que há um agente que trabalha naquela situação, delegar para ele realizar análise/trabalhos em cima, sempre.
+
+Quando houver tarefas paralelas, seguir `docs/agent-workflow.md` e registrar o estado em `docs/agent-worklog.md`. Cada agente deve reservar preferencialmente no maximo um arquivo para edicao por vez. Conflitos de reserva devem ser comunicados ao coordenador antes de editar.
+
+Cada fluxo delegado deve receber um identificador único de workload, informado explicitamente no prompt do subagente. O mesmo identificador deve aparecer no título da entrada correspondente em `docs/agent-worklog.md`, para que o subagente reconheça qual workload pertence a ele e consiga atualizar apenas o próprio registro.
+
+Se um subagente encontrar um problema que pertence ao escopo de outra skill, deve reportar a descoberta, causa provável, arquivo afetado e evidências ao coordenador. Não deve corrigir diretamente o problema fora do próprio escopo; o coordenador fará o roteamento para o subagente adequado.
+
+Após concluir cada fluxo delegado, o coordenador deve revisar imediatamente `docs/agent-worklog.md` em busca de deadlocks, reservas conflitantes, tarefas presas em `in_progress`, dependências não resolvidas ou agentes sem encerramento. O coordenador deve corrigir o estado do worklog e encaminhar qualquer bloqueio antes de iniciar o próximo fluxo.
+
 ## visual-components
 
 Usar ao criar ou alterar componentes visuais, regras de design, estados de UI, layouts responsivos, loading, acessibilidade ou testes de componentes.
@@ -682,6 +712,27 @@ Responsabilidades:
 - Criar testes unitários de transição, testes de bridge/API e testes de integração.
 - Criar ou documentar smoke tests reais para Tauri, WebView, OAuth e áudio nativo.
 - Registrar logs com correlação sem expor tokens ou dados sensíveis.
+- Manter contratos tipados de comunicação entre frontend, Tauri/Rust, player, áudio e visualizers em `src/interfaces/`.
+- Tratar o frontend/WebView como camada volátil: ele pode perder estado a qualquer refresh e não é fonte confiável para payloads persistidos.
+- Persistir no Rust/cache nativo todo estado necessário após refresh e expor comandos/eventos de snapshot para reidratação sob demanda.
+- Normalizar erros de bridge em contratos estruturados com mensagem, código, operação e correlação; nunca deixar `[object Object]` chegar à UI ou aos logs.
+
+## player
+
+Usar ao alterar fila, reprodução, troca/skip de faixas, resolução de streams, playlists, áudio nativo ou estado persistente do player.
+
+Responsabilidades:
+
+- Importar e manter o contexto completo da playlist na fila antes de iniciar ou continuar a reprodução.
+- Isolar fila, índice, geração e respostas por playlist para nunca tocar faixas de outra playlist.
+- Cancelar ou invalidar requests de stream antigos ao trocar, skipar ou substituir uma faixa.
+- Tratar timeout, retry, erro parcial, faixa indisponível, fim da playlist e troca rápida sem quebrar o player.
+- Coordenar paginação contínua até o terminal correto, sem perder músicas próximas do último continuation.
+- Definir contratos tipados entre UI, bridge Tauri, resolver de stream e áudio nativo.
+- Criar testes de troca rápida de playlist/faixa, fila, cancelamento, stale responses, paginação, drag and drop e recuperação de erro.
+- Validar runtime com playlists reais, troca rápida, áudio nativo e reload/reconnect.
+- Manter o estado persistente do player, fila e payloads necessários no Rust/cache nativo, nunca depender de memória ou `localStorage` do frontend volátil.
+- Usar contratos em `src/interfaces/` para comandos, snapshots, eventos, erros e reidratação do player.
 
 ## visualizers
 
@@ -692,6 +743,8 @@ Responsabilidades:
 - Documentar fonte do analyzer, sample rate, bandas, cadence, smoothing e pausa.
 - Manter aquisição de áudio separada da renderização.
 - Limitar histórico, alocações e custo por frame.
+- Criar controles de usuário para parâmetros dos visualizers que façam sentido ajustar, com limites, valores padrão, acessibilidade e persistência quando aplicável.
+- Revalidar sempre os controles gerais do visualizer: remover controles sem valor, adicionar controles necessários e melhorar rótulos, limites, defaults, acessibilidade, persistência e efeito real no visualizer.
 - Testar pausa, histórico, intensidade, hover, troca de visualizer e layout de background.
 - Validar stacking context, overlays, tooltips e comportamento responsivo.
 
@@ -711,3 +764,33 @@ Responsabilidades:
 ## Regra de validação
 
 Toda alteração relevante deve informar quais testes foram executados, quais fluxos foram validados em runtime e quais limitações permaneceram. Build passando sozinho não equivale a validação funcional ou visual.
+
+## fluxos (precisam estar funcionando obrigatóriamente, testados e reforçado contra falhas)
+
+abrir o app, entrar na tela principal de inicio.
+fontes deve listar as atuais fontes, se estão online/offline.
+Abrir Configurações, com o visualizer aberto.
+Abrir Configurações, com o visualizer fechado.
+Abrir Configurações, entrar menu de visualizers e poder escolher Mascot, Barras, Serpentes ou Espectrograma.
+Poder ajustar controles dos visualizers enquanto estar em modo developer.
+Não poder ajustar controles dos visualizers enquanto estar em modo developer e não visualizar controles.
+Abrir o visualizer completo pelo player.
+Minimizar o visualizer ao abrir Logs.
+Visualizar e filtrar Logs.
+Abrir playlists locais, favoritas e YouTube Music.
+Carregar playlists, todas as músicas de uma vez, mostrando o loading até terminar, validar a situação quando a playlist tem o continuous e quando não tem o continuos.
+O Player precisa de um fluxo de playlist próprio ao invés de depender da página de listagem de músicas da playlist.
+Skip rápido de músicas sem deixar streams antigos interferirem, e ao chegar no último skip, a música precisa tocar.
+Arrastar uma música para uma playlist local e importar corretamente seguindo as regras de salvar arquivos.
+Arrastar uma pasta com músicas para uma playlist local e importar corretamente seguindo as regras de salvar arquivos.
+Selecionar músicas pelo picker nativo.
+Selecionar pastas com músicas pelo picker nativo.
+Persistir a biblioteca local em appLocalDataDir/library.
+Restaurar playlists e músicas após reiniciar.
+Reproduzir músicas locais persistidas.
+Favoritar e remover músicas dos favoritos e persistir.
+Usar controles de play, pause, anterior, próxima, volume e seek.
+Abrir o app com identificação VibeDeck nas janelas e WebViews.
+ao sincronizar conta google, ele trazer as playlist do youtube música para a lista de playlists.
+ao apertar na fonte do youtube music, deve mostrar as playlist que vem de lá em cards
+ao apertar na fonte do local, deve mostrar as playlist que vem de lá em cards

@@ -53,13 +53,14 @@ export function updateAudioAnalysis(data = {}) {
   }
 }
 
-function smoothAudio() {
-  smooth.subBass += (audio.subBass - smooth.subBass) * 0.18;
-  smooth.bass += (audio.bass - smooth.bass) * 0.18;
-  smooth.mids += (audio.mids - smooth.mids) * 0.18;
-  smooth.highs += (audio.highs - smooth.highs) * 0.18;
-  smooth.energy += (audio.energy - smooth.energy) * 0.08;
-  smooth.beat += (audio.beat - smooth.beat) * 0.28;
+function smoothAudio(deltaSeconds) {
+  const approach = (current, target, timeConstant) => current + (target - current) * (1 - Math.exp(-deltaSeconds / timeConstant));
+  smooth.subBass = approach(smooth.subBass, audio.subBass, 0.085);
+  smooth.bass = approach(smooth.bass, audio.bass, 0.085);
+  smooth.mids = approach(smooth.mids, audio.mids, 0.085);
+  smooth.highs = approach(smooth.highs, audio.highs, 0.085);
+  smooth.energy = approach(smooth.energy, audio.energy, 0.205);
+  smooth.beat = approach(smooth.beat, audio.beat, 0.051);
 }
 
 
@@ -175,41 +176,13 @@ export function createSnakeVisualizer(container, options = {}) {
   backLower.position.set(0, -6, -5); scene.add(backLower);
   const centerLight = new THREE.PointLight(0xff0808, 5.0, 14, 1.8);
   centerLight.position.set(0, 0, 1); scene.add(centerLight);
+  const userLights = [];
 
   const snakeGroup = new THREE.Group();
   scene.add(snakeGroup);
   const snakes = [];
-  // Composicao final deterministica. O XY e fixo; cada rota recebe profundidade
-  // propria para que cruzamentos parecam entrelacados, sem interpenetracao.
-  // A ordem e deliberadamente irregular (nao aleatoria) para quebrar repeticao visual.
-  const ROUTES = [
-    // TOP
-    { edge: "top",    a: -0.94, b: -0.38, bend: 0.88, z:  1.35, profile: 0 },
-    { edge: "top",    a:  0.38, b:  0.94, bend: 0.88, z: -0.85, profile: 2 },
-    { edge: "top",    a: -0.32, b:  0.18, bend: 0.70, z: -1.70, profile: 1 },
-    { edge: "top",    a: -0.72, b:  0.70, bend: 0.46, z:  0.45, profile: 3 },
-
-    // RIGHT
-    { edge: "right",  a: -0.94, b: -0.38, bend: 0.88, z: -1.25, profile: 1 },
-    { edge: "right",  a:  0.38, b:  0.94, bend: 0.88, z:  1.55, profile: 3 },
-    { edge: "right",  a: -0.30, b:  0.22, bend: 0.70, z:  0.20, profile: 0 },
-    { edge: "right",  a: -0.72, b:  0.70, bend: 0.46, z: -2.00, profile: 2 },
-
-    // BOTTOM
-    { edge: "bottom", a:  0.38, b:  0.94, bend: 0.88, z:  1.10, profile: 2 },
-    { edge: "bottom", a: -0.94, b: -0.38, bend: 0.88, z: -1.50, profile: 0 },
-    { edge: "bottom", a: -0.18, b:  0.32, bend: 0.70, z:  0.15, profile: 3 },
-    { edge: "bottom", a: -0.70, b:  0.72, bend: 0.46, z: -2.15, profile: 1 },
-
-    // LEFT
-    { edge: "left",   a:  0.38, b:  0.94, bend: 0.88, z: -1.05, profile: 3 },
-    { edge: "left",   a: -0.94, b: -0.38, bend: 0.88, z:  1.70, profile: 1 },
-    { edge: "left",   a: -0.22, b:  0.30, bend: 0.70, z: -0.10, profile: 2 },
-    { edge: "left",   a: -0.70, b:  0.72, bend: 0.46, z: -2.25, profile: 0 },
-  ];
-
-  // Variacao Z ao longo da propria curva. Ela faz um tubo passar por cima e depois
-  // voltar para tras de outro sem alterar o desenho XY aprovado.
+  // Vertical weave: side lanes rise; center lanes descend. Phase offsets and
+  // alternating depth profiles make crossings read as over/under interlacing.
   const DEPTH_PROFILES = [
     [ 0.00,  0.25,  0.70,  1.00,  0.55, -0.20, -0.65, -0.30,  0.10, 0.00 ],
     [ 0.00, -0.30, -0.75, -0.95, -0.40,  0.30,  0.75,  0.35, -0.10, 0.00 ],
@@ -217,31 +190,15 @@ export function createSnakeVisualizer(container, options = {}) {
     [ 0.00, -0.15, -0.45, -0.10,  0.60,  0.90,  0.30, -0.45, -0.25, 0.00 ],
   ];
 
-  // Ordem fixa de distribuicao. Parece embaralhada, mas e 100% reproduzivel.
-  const ROUTE_ORDER = [0, 5, 10, 15, 2, 13, 8, 7, 1, 12, 11, 6, 3, 14, 9, 4];
-  function routePoint(edge, slot, z) {
-    const { halfWidth: w, halfHeight: h, edgeMargin: m } = cfg.geometry;
-    if (edge === "left")   return new THREE.Vector3(-w - m, slot * h, z);
-    if (edge === "right")  return new THREE.Vector3( w + m, slot * h, z);
-    if (edge === "top")    return new THREE.Vector3(slot * w,  h + m, z);
-    return new THREE.Vector3(slot * w, -h - m, z);
-  }
-
-  function inwardNormal(edge) {
-    if (edge === "left") return new THREE.Vector2(1, 0);
-    if (edge === "right") return new THREE.Vector2(-1, 0);
-    if (edge === "top") return new THREE.Vector2(0, -1);
-    return new THREE.Vector2(0, 1);
-  }
-
+  let snakeLayout = Array.from({ length: 8 }, (_, i) => ({ lane: i < 2 ? (i ? 'right' : 'left') : 'center', x: [-7.5, 7.5, -2.4, 0, 2.4, -1.2, 1.2, 0][i], z: (i % 2 ? -1 : 1) * (0.35 + (i % 3) * 0.35), scale: 0.82 + (i % 3) * 0.08, phase: i * 0.72 }));
   function createCurve(layer, route, index) {
-    const baseZ = layer.z + route.z;
-    const start = routePoint(route.edge, route.a, baseZ);
-    const end = routePoint(route.edge, route.b, baseZ);
-    const inward = inwardNormal(route.edge);
+    const direction = route.lane === 'center' ? -1 : 1;
+    const x = route.x;
+    const start = new THREE.Vector3(x, direction > 0 ? -cfg.geometry.halfHeight - 1.5 : cfg.geometry.halfHeight + 1.5, layer.z + route.z);
+    const end = new THREE.Vector3(x, direction > 0 ? cfg.geometry.halfHeight + 1.5 : -cfg.geometry.halfHeight - 1.5, layer.z + route.z);
     const points = [];
     const count = cfg.geometry.controlPoints;
-    const profile = DEPTH_PROFILES[route.profile % DEPTH_PROFILES.length];
+     const profile = DEPTH_PROFILES[(route.profile ?? index) % DEPTH_PROFILES.length];
 
     const bend = (1.45 + geometryShape.amplitude * 2.35) * route.bend;
     const phase = index * 0.73;
@@ -252,16 +209,8 @@ export function createSnakeVisualizer(container, options = {}) {
       const t = i / (count - 1);
       const envelope = Math.sin(Math.PI * t);
       const p = new THREE.Vector3().lerpVectors(start, end, t);
-
-      p.x += inward.x * bend * envelope;
-      p.y += inward.y * bend * envelope;
-
-      // Pequena assimetria deterministica: organico sem RNG.
-      const tangent = new THREE.Vector2(end.x - start.x, end.y - start.y).normalize();
-      const normal = new THREE.Vector2(-tangent.y, tangent.x);
-      const wave = Math.sin(t * Math.PI * 2 + phase) * 0.18 * geometryShape.amplitude * envelope;
-      p.x += normal.x * wave;
-      p.y += normal.y * wave;
+      const crossing = Math.sin(t * Math.PI * 2 + route.phase) * (route.lane === 'center' ? 1.05 : 0.32) * geometryShape.amplitude * envelope;
+      p.x += crossing;
 
       // Profundidade artistica real. O perfil e zero nas pontas, preservando a entrada pela borda.
       const pi = Math.min(profile.length - 1, Math.round(t * (profile.length - 1)));
@@ -279,15 +228,7 @@ export function createSnakeVisualizer(container, options = {}) {
       points.push(p);
     }
 
-    if (points.length > 3 && tangentAngle !== 0) {
-      const baseline = end.clone().sub(start);
-      const tangentLength = baseline.length() / (points.length - 1) * 1.20;
-      const axis = new THREE.Vector3(0, 0, 1);
-      const t0 = baseline.clone().normalize().applyAxisAngle(axis, tangentAngle);
-      const t1 = baseline.clone().normalize().applyAxisAngle(axis, -tangentAngle);
-      points[1].copy(start).add(t0.multiplyScalar(tangentLength));
-      points[points.length - 2].copy(end).sub(t1.multiplyScalar(tangentLength));
-    }
+    if (points.length > 3 && tangentAngle !== 0) { points[1].x += Math.tan(tangentAngle) * 0.18; points[points.length - 2].x -= Math.tan(tangentAngle) * 0.18; }
 
     return new THREE.CatmullRomCurve3(points, false, "centripetal", 0.35);
   }
@@ -300,14 +241,9 @@ export function createSnakeVisualizer(container, options = {}) {
     snakes.length = 0;
 
     let globalIndex = 0;
-    cfg.layers.forEach((layer, layerIndex) => {
-      const count = Math.max(1, Math.min(ROUTES.length, Math.round(layer.count)));
-      // Cada camada inicia em outro ponto da ordem fixa; nao ha sorteio.
-      const routeOffset = (layerIndex * 5) % ROUTE_ORDER.length;
-
-      for (let i = 0; i < count; i++) {
-        const routeIndex = ROUTE_ORDER[(i + routeOffset) % ROUTE_ORDER.length];
-        const route = ROUTES[routeIndex];
+    snakeLayout.slice(0, 8).forEach((route, i) => {
+      const layerIndex = i % layerResources.length;
+      const layer = cfg.layers[layerIndex];
         const curve = createCurve(layer, route, globalIndex);
         const geometry = new THREE.TubeGeometry(
           curve,
@@ -317,12 +253,11 @@ export function createSnakeVisualizer(container, options = {}) {
           false
         );
         const mesh = new THREE.Mesh(geometry, layerResources[layerIndex].material);
-        mesh.scale.setScalar(layer.scale);
+        mesh.scale.setScalar(layer.scale * route.scale);
         mesh.frustumCulled = true;
         snakeGroup.add(mesh);
         snakes.push({ mesh, geometry, curve, layerIndex, route });
         globalIndex++;
-      }
     });
   }
   rebuildSnakes();
@@ -351,13 +286,15 @@ export function createSnakeVisualizer(container, options = {}) {
   const clock = new THREE.Clock();
   let raf = 0;
   let running = true;
+  const frameStats = { count: 0, totalMs: 0, lastMs: 0, maxMs: 0 };
 
   function frame() {
     if (!running) return;
     raf = requestAnimationFrame(frame);
+    const frameStartedAt = performance.now();
     const dt = Math.min(clock.getDelta(), 0.05);
     const time = clock.elapsedTime;
-    smoothAudio();
+    smoothAudio(dt);
 
     uniforms.uTime.value = time;
     uniforms.uBass.value = smooth.bass;
@@ -376,6 +313,7 @@ export function createSnakeVisualizer(container, options = {}) {
     backLeft.intensity = backRight.intensity = 4.2 + smooth.bass*9.0;
     backLower.intensity = 2.5 + smooth.subBass*6.0;
     centerLight.intensity = 4.0 + smooth.bass*9.0 + smooth.beat*4.0;
+    userLights.forEach(light => { light.intensity = 2.4 + smooth.energy * 1.2; });
     bloom.strength = cfg.bloom.strength + smooth.bass*0.32 + smooth.energy*0.10;
 
     center.scale.setScalar(1 + smooth.bass*0.45 + smooth.beat*0.30);
@@ -383,6 +321,11 @@ export function createSnakeVisualizer(container, options = {}) {
     snakeGroup.rotation.z = Math.sin(time*0.055)*0.004;
 
     composer.render();
+    const frameMs = performance.now() - frameStartedAt;
+    frameStats.count += 1;
+    frameStats.totalMs += frameMs;
+    frameStats.lastMs = frameMs;
+    frameStats.maxMs = Math.max(frameStats.maxMs, frameMs);
   }
   frame();
 
@@ -400,6 +343,10 @@ export function createSnakeVisualizer(container, options = {}) {
       geometries: renderer.info.memory.geometries,
       textures: renderer.info.memory.textures,
       snakes: snakes.length,
+      frameMs: frameStats.lastMs,
+      averageFrameMs: frameStats.count ? frameStats.totalMs / frameStats.count : 0,
+      maxFrameMs: frameStats.maxMs,
+      frameBudgetMs: 1000 / 60,
     };
   }
 
@@ -435,6 +382,23 @@ export function createSnakeVisualizer(container, options = {}) {
       geometryShape.amplitude = THREE.MathUtils.clamp(Number(amplitude) || 0, 0, 1.5);
       geometryShape.thickness = THREE.MathUtils.clamp(Number(thickness) || 0, 0.4, 2.5);
       rebuildSnakes();
+    },
+    setSnakeLayout(layout) {
+      if (!Array.isArray(layout)) return;
+      snakeLayout = layout.slice(0, 8).map((item, i) => ({ lane: item.lane === 'center' ? 'center' : (i % 2 ? 'right' : 'left'), x: THREE.MathUtils.clamp(Number(item.x) || 0, -9, 9), z: THREE.MathUtils.clamp(Number(item.z) || 0, -6, 3), scale: THREE.MathUtils.clamp(Number(item.scale) || 1, 0.5, 1.4), phase: THREE.MathUtils.clamp(Number(item.phase) || 0, 0, 6.28) }));
+      rebuildSnakes();
+    },
+    setUserLights(layout) {
+      if (!Array.isArray(layout)) return;
+      userLights.forEach(light => scene.remove(light));
+      userLights.length = 0;
+      layout.slice(0, 8).forEach(item => {
+        const light = new THREE.PointLight(0x9fc8e8, 2.4, 20, 1.6);
+        light.position.set(THREE.MathUtils.clamp(Number(item.x) || 0, -12, 12), THREE.MathUtils.clamp(Number(item.y) || 0, -9, 9), THREE.MathUtils.clamp(Number(item.z) || 0, -10, 14));
+        light.lookAt(0, 0, 0);
+        scene.add(light);
+        userLights.push(light);
+      });
     },
     dispose,
     setRunning(value) {

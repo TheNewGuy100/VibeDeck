@@ -1,0 +1,2785 @@
+# Agent Worklog
+
+## Agent: player-next-click-lost [Workload: PLAYER-20261001-NEXT-01]
+
+- Workload ID: `PLAYER-20261001-NEXT-01`
+- Task: Diagnosticar e corrigir avanço Next perdido entre ativações concorrentes.
+- Status: completed
+- Started: 2026-10-02 00:00
+- Finished: 2026-10-02 00:01
+- Depends on: PLAYER-20261001-QUEUE-08
+- Planned files:
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.test.ts`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+- Changed files:
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.test.ts`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (15 files, 155 tests)
+  - `npm run build`: pass (existing Serpents3D chunk >500 kB warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (16 tests; first final retry transiently failed to find `rustls` rlib, immediate rerun passed)
+  - `git diff --check`: pass (existing LF/CRLF notices)
+- Runtime validation: Actual VibeDeck `http://localhost:1420/` opened; `window.__TAURI_INTERNALS__` was false, account disconnected, queue rows 0 and Next disabled. Could not exercise native track transitions/actual audio. No other URL was used.
+- Result: Confirmed the old `stop_audio` call emitted a same-generation snapshot during `play()`'s await window; manual Next did not set activation pending, so that snapshot could restore the old track/index. Same-track early-return also compared only ID and skipped a distinct duplicate queue slot. Removed the redundant stop-before-activation call; native play commands now atomically stop/replace under the Rust activation lock. Added monotonic `activationSequence` to shared activation/snapshot contracts and Rust, rejecting stale same-generation activations. Frontend marks manual/panel activation pending immediately, rejects old snapshots while pending, dedupes ended polling during activation, distinguishes queue slots for identical IDs, and resets the slot on failure to allow recovery. Sanitized UI/native start-complete-failure correlation logs include intent, queue indexes/IDs, generation and revision. Repeat off/playlist/track terminal rules and complete owned queue are unchanged.
+- Blockers: Authenticated native WebView with playable 3+ track queue unavailable for runtime validation.
+
+## Agent: rust-playlist-catalog [Workload: IF-20250925-LIBRARY-03]
+
+- Workload ID: `IF-20250925-LIBRARY-03`
+- Task: Persistencia Rust/native e hidratacao de snapshots de playlists e paginas carregadas.
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: IF-20250925-CONTRACTS-01, PLAYER-20250925-LOCAL-03
+- Planned files:
+  - `src-tauri/src/playlist_catalog.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/interfaces/library.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/playlist-loader.ts`
+  - `src/App.vue`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/playlist_catalog.rs` tests
+  - `src/services/playlist-loader.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `docs/interface-flows.md`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src-tauri/src/playlist_catalog.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/interfaces/library.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/playlist-loader.ts`
+  - `src/App.vue`
+  - `docs/interface-flows.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+-  - `src-tauri/src/playlist_catalog.rs`
+-  - `src-tauri/src/lib.rs`
+-  - `src/interfaces/library.ts`
+-  - `src/services/google-sync.ts`
+-  - `src/services/playlist-loader.ts`
+-  - `src/App.vue`
+-  - `docs/interface-flows.md`
+-  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (10 files, 82 tests)
+-  - `npm run build`: pass (existing large Three.js chunk warning)
+-  - `cargo fmt --all -- --check`: pass
+-  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+-  - `cargo test`: pass (9 tests)
+-  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Native Tauri/WebView refresh, continuation and audio runtime smoke not available in this environment; manual validation remains required.
+- Result: Added versioned Rust playlist catalog commands, atomic tmp/backup recovery, page merge/deduplication, continuation and terminal persistence, stale-generation rejection, sanitized track storage, startup hydration and frontend reconciliation after YouTube metadata sync.
+- Blockers: none
+
+## Agent: playlist-catalog-full-pages [Workload: PLAYER-20250925-PAGINATION-04]
+
+- Workload ID: `PLAYER-20250925-PAGINATION-04`
+- Task: Corrigir catálogo limitado às primeiras 100 músicas
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: rust-playlist-catalog, player-pagination-regression
+- Planned files:
+  - `src-tauri/src/playlist_catalog.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/services/playlist-loader.ts`
+  - `src/services/google-sync.ts`
+  - `src/App.vue`
+  - testes de paginação/catalogo
+- Reserved files:
+   -
+- Changed files:
+   - `src-tauri/src/playlist_catalog.rs`
+   - `src-tauri/src/lib.rs`
+   - `src/services/playlist-loader.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/App.vue`
+   - `src/models/library.ts`
+   - `src/services/player-state.test.ts`
+   - `docs/youtube-api-registry.md`
+   - `docs/agent-worklog.md`
+-  - `npm test -- --run`: pass (10 files, 85 tests)
+-  - `npm run build`: pass (existing large Three.js chunk warning)
+-  - `cargo fmt --all -- --check`: pass
+-  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+-  - `cargo test`: pass (10 tests)
+-  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri/WebView authenticated YouTube pagination, reload, and native queue smoke not available in this environment; no non-runtime URL was used.
+- Result: Root cause was cursor state existing only in process memory after hydration plus fire-and-forget page saves. Continuation cursors are now persisted per page and restored from the Rust catalog, saves are ordered, pages merge/deduplicate without a 100-track cap, terminal/empty/repeated/invalid cursor paths retain loaded tracks, and hydrated queues retain the complete catalog.
+- Blockers: none
+
+## Agent: live-playlist-pagination-state [Workload: PLAYER-20250927-LIVE-PAGINATION-05]
+
+- Workload ID: `PLAYER-20250927-LIVE-PAGINATION-05`
+- Task: Corrigir estado real da paginação YouTube
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: playlist-catalog-full-pages
+- Planned files:
+  - `src/App.vue`
+  - `src/services/playlist-loader.ts`
+  - `src/services/google-sync.ts`
+  - `src-tauri/src/lib.rs`
+  - testes de paginação/player
+- Reserved files:
+   - `src/App.vue`
+   - `src/services/playlist-loader.ts`
+   - `src/services/google-sync.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/services/google-sync.test.ts`
+   - `src-tauri/src/lib.rs`
+   - `src-tauri/src/playlist_catalog.rs`
+   - `docs/youtube-api-registry.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/App.vue`
+   - `src/services/playlist-loader.test.ts`
+   - `docs/youtube-api-registry.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (10 files, 86 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `cargo fmt --all -- --check`: pass
+   - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+   - `cargo test`: pass (10 tests)
+   - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Tauri CDP `Just The Best` smoke not-run; the available Playwright tab is Vite at `http://127.0.0.1:5173/`, not an authenticated Tauri WebView. No unrelated query-string URL was used.
+- Result: Root cause was `loadMoreTracks` treating `loadingPlaylistId` as an unconditional skip while the initial page was still in flight. A scroll/overflow continuation could therefore be discarded even though Rust returned 100 tracks. Frontend pagination now shares one in-flight operation per playlist generation, queues continuation triggers during initial loading, awaits each page persistence, merges 100+100 tracks, updates cursor/terminal state, and retains stale-generation protection. Added the exact 100-track continuation regression plus existing multi-page, terminal, error, duplicate cursor, no-continuation, and stale-generation coverage.
+- Blockers: none
+
+## Agent: playlist-fetch-persist-render-e2e [Workload: PLAYER-20250927-PLAYLIST-E2E-06]
+
+- Workload ID: `PLAYER-20250927-PLAYLIST-E2E-06`
+- Task: Validar fetch, catálogo Rust e exibição ponta a ponta
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: live-playlist-pagination-state, rust-playlist-catalog
+- Planned files:
+  - `src/App.vue`
+  - `src/services/playlist-loader.ts`
+  - `src/services/google-sync.ts`
+  - `src-tauri/src/playlist_catalog.rs`
+  - `src-tauri/src/lib.rs`
+  - testes E2E/contrato
+- Reserved files:
+  - `src-tauri/src/audio/engine.rs` (sequential final hardening)
+- Changed files:
+  - `src/services/playlist-loader.ts`
+  - `src/services/playlist-loader.test.ts`
+  - `src/App.vue`
+  - `src-tauri/src/lib.rs`
+  - `docs/youtube-api-registry.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 90 tests)
+  - `npm run build`: pass (existing >500 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test`: parallel run hit existing local-library temporary-directory cleanup races; `cargo test -- --test-threads=1`: pass (10 tests, including Rust catalog 250-track save/load)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: `npm run tauri:debug`; CDP `http://127.0.0.1:9222` against the native `http://localhost:1420/` WebView and authenticated YouTube session. Before fix: `Just The Best` had 100 rows hidden, `body.playlist-is-loading=true`; native log recorded direct return of 100 tracks while invoke stayed pending. After fix/restart: `Just The Best` showed 529/529 visible rows and loading=false, including following app reload. Live `Safeplace` traversed 12 continuation pages (11 pages of ~100 and a final 58), UI logged page merge after each awaited catalog save, provider terminal and full load at 1257; 1257/1257 rows visible and loading=false. Reload restored all 1257 rows from catalog.
+- Result: Root cause was a Rust non-reentrant mutex deadlock: continuation response construction held `YOUTUBE_PLAYLIST_CONTINUATIONS` then re-locked it through `playlist_continuation_state`, so Tauri invoke never completed despite the native “returned 100 tracks” log. Dropped the guard before reading the final cursor. App now owns initial fetch plus every continuation in one promise per playlist/generation; scroll requests join it; page persistence is awaited and failures surface; loading cleanup is generation-owned. Hydration seeds the frontend generation counter from persisted catalog generations. Added concurrent-owner, 100-to-200 merge, terminal, failure/retry/unlock, and stale-switch regressions.
+- Blockers: none
+
+## Agent: player-queue-playlist-isolation [Workload: PLAYER-20261001-QUEUE-01]
+
+- Workload ID: `PLAYER-20261001-QUEUE-01`
+- Task: Isolar fila do player e shuffle
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: player-queue-isolation, interface-player-rehydration
+- Planned files:
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - testes player
+- Reserved files:
+  - `src/visualizers/Serpents3D.vue`
+- Changed files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.test.ts`
+  - `src/services/local-library.test.ts`
+  - `src/App.vue`
+  - `src-tauri/src/audio/engine.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 101 tests)
+  - `npm run build`: pass (existing large Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader and UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (10 tests)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: CDP endpoint 127.0.0.1:9222 was available with a VibeDeck page at http://localhost:1420/, but `window.__TAURI_INTERNALS__` was undefined and the page reported the expected bridge invoke error. The local playlist was empty and YouTube was disconnected, so playback/navigation/shuffle/reload native smoke could not be exercised. Browser console showed only favicon.ico 404 as an error.
+- Result: Queue is an owned native snapshot context with playlist ID/source, generation, ordered track payloads, current index, and shuffled state. Visible playlist navigation no longer invalidates playback or replaces queue state. Playlist shuffle now shuffles a queue copy and preserves the current item; skip, repeat, ended-track, and queue-panel selection resolve against the internal queue. Native snapshots retain queue context after EOF/stop, frontend reconnect restores it, and older queue generations/activation requests are rejected; native activation is serialized so an older concurrent start cannot stop a newer queue. Parent wiring uses the visual workload's typed queue-panel props and event and validates its index+track ID before playback.
+- Blockers: Native playback runtime smoke needs an authenticated Tauri WebView and available playable test track; the available CDP page did not expose the Tauri bridge.
+- Queue panel handoff (VIS-20261001-QUEUE-01): contract aligned to the component's typed props `open`, `tracks` (`id/title/artist/cover/accent/source`), `currentTrackId`, `currentTrackIndex`, `isPlaying`; events `update:open` and `select-track` (`queueIndex` + `trackId`). Parent validates index and ID against the internal queue and routes to queue playback. The panel is a view and does not own/reorder queue state.
+
+## Agent: player-queue-visual-component [Workload: VIS-20261001-QUEUE-01]
+
+- Workload ID: `VIS-20261001-QUEUE-01`
+- Task: Criar controle visual da fila do player
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-01
+- Planned files:
+  - componente novo em `src/components/`
+  - `src/styles.css`
+  - teste de componente
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/components/QueuePanel.vue`
+  - `src/components/queue-panel.test.ts`
+  - `src/styles.css`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 98 tests)
+  - `npm run build`: blocked by concurrent player contract edits (`NativePlayerActivation` missing `queueSource`/`shuffled` in `src/App.vue`, Google/local tests; `PlayerSnapshot.queueSource` optionality in `src/services/player-sync.test.ts`)
+  - `git diff --check -- src/components/QueuePanel.vue src/components/queue-panel.test.ts src/styles.css docs/agent-worklog.md`: pass (CRLF normalization notice for shared CSS)
+- Runtime validation: VibeDeck native WebView `http://localhost:1420/`, component mounted as isolated smoke fixture; desktop 1440x900 showed panel and two rows, active playing label correctly announced; mobile 390x844 panel bounds x=12..378 and trigger x=324..374, no queue component overflow. Document scroll overflow is pre-existing app min-width behavior. The WebView also logged its existing non-native `invoke` error.
+- Result: Added a controlled, accessible queue popover with stable track entries, current playing/paused status, queue selection payload, empty state, Escape/close behavior, reduced-motion handling, mobile sizing and playlist-matching lime active-row treatment. Public contract: props `open`, `tracks: QueueTrack[]` (`id`, `title`, `artist`, `cover`, `accent`, `source`), `currentTrackId: string | null`, `currentTrackIndex: number`, `isPlaying`; emits `update:open(boolean)` and `select-track({ queueIndex, trackId })`. No clear action is exposed.
+- Blockers: production build remains blocked by the concurrent player contract changes listed above; parent wiring is pending.
+
+## Agent: player-volume-sync [Workload: IF-20250925-VOLUME-02]
+
+- Workload ID: `IF-20250925-VOLUME-02`
+- Task: Corrigir sincronizacao responsiva de volume entre frontend e AudioEngine nativo.
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: IF-20250925-CONTRACTS-01, IF-20250925-RECONNECT-01
+- Planned files:
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/google-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `docs/agent-worklog.md`
+  - `src/styles.css`
+  - `src/interfaces/player.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/google-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+-  - `src/App.vue`
+-  - `src/interfaces/player.ts`
+-  - `src/services/player-sync.ts`
+-  - `src/services/player-sync.test.ts`
+-  - `src/services/google-sync.ts`
+-  - `src/services/google-sync.test.ts`
+-  - `src-tauri/src/audio/engine.rs`
+-  - `src-tauri/src/audio/mod.rs`
+-  - `src-tauri/src/lib.rs`
+-  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (10 files, 82 tests)
+-  - `npm run build`: pass (existing large Three.js chunk warning)
+-  - `cargo fmt --all -- --check`: pass
+-  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+-  - `cargo test`: pass (6 tests)
+-  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Native Tauri/audio-device smoke not-run; browser fallback path remains covered by the existing HTMLAudio handling and contract tests. No non-runtime URL was used.
+- Result: Volume changes now update the UI immediately, coalesce native writes for 16 ms, carry a monotonic intent sequence, return the authoritative native snapshot, reject stale native requests, preserve mute/unmute semantics, and rehydrate volume state without allowing older responses to overwrite newer intent.
+- Blockers: none
+
+## Agent: player-queue-panel-integration [Workload: IF-20261001-QUEUE-02]
+
+- Workload ID: `IF-20261001-QUEUE-02`
+- Task: Integrar painel visual à fila do player
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-01, VIS-20261001-QUEUE-01
+- Planned files:
+  - `src/App.vue`
+  - testes de player/integration se necessário
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 101 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader and UnsupportedContainer warnings)
+  - `cargo test`: pass (10 tests)
+  - `git diff --check`: pass (LF/CRLF normalization notices)
+- Runtime validation: `http://127.0.0.1:1420/` unavailable (`ERR_CONNECTION_REFUSED`); desktop/mobile visual smoke and native audio action could not be exercised in browser runtime.
+- Result: Confirmed the shared App.vue already contains the requested QueuePanel integration: computed row props derive solely from internal `queue`; native snapshots/rehydration replace that queue and trigger reactive props; shuffle reorders that internal queue; navigation leaves queue state intact; row select checks both queue index and stable track ID, sets queue index, and routes through `play(item, true)` using the queue-owned playlist context. The controlled open state is presentation-only. Existing focused component tests cover the emitted index/ID and current playing/paused states; no App.vue change was needed.
+- Blockers: Runtime browser unavailable; no App-level harness exists for direct integration assertions without adding testability surface beyond this workload.
+
+## Agent: player-interface-flows-audio-native [Workload: PLAYER-20250925-LOCAL-03]
+
+- Workload ID: `PLAYER-20250925-LOCAL-03`
+- Task: Corrigir reprodução local persistida, normalização de erros e logging estruturado na fronteira frontend/Tauri/AudioEngine.
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: none
+- Planned files:
+  - `src/interfaces/bridge.ts`
+  - `src/services/local-library.ts`
+  - `src/services/app-logs.ts`
+  - `src/App.vue`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/audio/mod.rs`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/interfaces/bridge.ts`
+  - `src/services/local-library.ts`
+  - `src/services/app-logs.ts`
+  - `src/App.vue`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/audio/mod.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/interfaces/bridge.ts`
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src/services/app-logs.ts`
+  - `src/App.vue`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 77 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: native Tauri local playback/device smoke not-run; actual managed audio fixture and output device are required.
+- Result: Local playback now sends catalog `trackId` plus verified managed path and correlation, returns/validates the native player snapshot, preserves canonical-root checks and typed failure categories, normalizes bridge errors, shows actionable UI messages, and persists structured sanitized log entries. Added contract coverage for payloads, missing/container/decoder/device errors, stale replacement, and recovery.
+- Blockers: Tauri/device runtime smoke remains unavailable in this environment.
+
+## Agent: app-interface-contracts [Workload: IF-20250925-CONTRACTS-01]
+
+- Workload ID: `IF-20250925-CONTRACTS-01`
+- Task: Criar camada tipada durável para contratos frontend/WebView, Tauri/Rust, biblioteca local, player e analyzer.
+- Status: completed
+- Started: 2026-09-27
+- Finished: 2026-09-27
+- Depends on: none
+- Planned files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/library.ts`
+  - `src/interfaces/bridge.ts`
+  - `src/interfaces/visualizer.ts`
+  - `src/interfaces/index.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/local-library.ts`
+  - `src/App.vue`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/library.ts`
+  - `src/interfaces/bridge.ts`
+  - `src/interfaces/visualizer.ts`
+  - `src/interfaces/index.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/local-library.ts`
+  - `src/App.vue`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/library.ts`
+  - `src/interfaces/bridge.ts`
+  - `src/interfaces/visualizer.ts`
+  - `src/interfaces/index.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/local-library.ts`
+  - `src/App.vue`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 74 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri/WebView/audio runtime smoke not-run; no unrelated query-string URL was used.
+- Result: Centralized revisioned player commands/snapshots/events, queue context, seek/volume intents, local catalog/import/managed references, structured bridge errors, and analyzer snapshot/event contracts. Migrated player, Google sync, local-library, and App imports without changing native serde names or persisted payload ownership. Added parser/discriminator and stale/reference/error contract coverage.
+- Blockers: none
+
+## Agent: player-repeat-one-queue-fix [Workload: PLAYER-20261001-QUEUE-04]
+
+- Workload ID: `PLAYER-20261001-QUEUE-04`
+- Task: Corrigir repeat-one e seleção da faixa
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-03
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/player.ts`
+  - testes de fila/repeat
+- Reserved files:
+  - `src/App.vue` (queue/repeat logic only; no repeat-control markup or styles)
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/components/queue-panel.test.ts`
+- Changed files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/components/queue-panel.test.ts`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 113 tests; first parallel run had Vitest worker startup errors)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader and UnsupportedContainer warnings)
+  - `cargo test`: pass (11 tests)
+  - `git diff --check`: pass (existing line-ending normalization notices)
+- Runtime validation: Native VibeDeck page was available at `http://localhost:1420/`, but `window.__TAURI_INTERNALS__` was false and the queue was empty (0 tracks). No authenticated/playable Tauri session was available, so repeat/track-selection audio runtime smoke could not be exercised.
+- Result: Explicit source selections now rotate the complete playlist order from the clicked track, update the current queue index and queue generation, and force activation even when the clicked track is already active. Repeat-mode transitions no longer rebuild/truncate the queue or change its index; playback boundary handling alone implements repeat-one, playlist wrap, and off terminal. New activation resets native-ended detection. Added coverage for full queue retention, queue count/rows, A→B selection, resetting shuffled order, repeat boundaries and stale stream-generation rejection. Rust snapshots already serialize the complete activation queue and index; no Rust snapshot schema change was needed.
+- Blockers: none
+
+## Agent: loop-button-position [Workload: VIS-20261001-LOOP-02]
+
+- Workload ID: `VIS-20261001-LOOP-02`
+- Task: Posicionar botão loop em right 250px
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: VIS-20261001-LOOP-01
+- Planned files:
+  - `src/styles.css`
+- Reserved files:
+  - none (completed)
+- Changed files:
+-  - `src/styles.css`
+- Tests:
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `git diff --check -- src/styles.css docs/agent-worklog.md`: pass (LF/CRLF normalization notice)
+- Runtime validation: not-run; desktop/mobile positioning confirmed from CSS cascade only.
+- Result: Desktop `.repeat-control` computes to `right: 250px`; existing `@media (max-width: 600px)` still overrides it with `right: calc(50% + 82px)` and safe-area-aware bottom placement.
+- Blockers: none
+
+## Agent: player-queue-panel-live-sync [Workload: PLAYER-20261001-QUEUE-05]
+
+- Workload ID: `PLAYER-20261001-QUEUE-05`
+- Task: Corrigir atualização ao vivo da fila do player
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-04, IF-20261001-QUEUE-02
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src-tauri/src/`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/components/queue-panel.test.ts`
+  - `src/interfaces/player.ts` (only if contract defect found)
+  - `src-tauri/src/audio/engine.rs` (only if Rust command defect found)
+  - `src-tauri/src/lib.rs` (only if command/event defect found)
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/components/queue-panel.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 117 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader and UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (11 tests)
+  - `git diff --check`: pass (LF/CRLF normalization warnings)
+- Runtime validation: `npm run tauri:debug` attempted and failed its `beforeDevCommand` because port 1420 was already occupied by the existing runtime. CDP `http://localhost:1420/` loaded VibeDeck but `window.__TAURI_INTERNALS__` was false and the source playlist had 0 tracks; repeat control was absent. Thus actual playlist selection/repeat native smoke could not be exercised. Only the actual VibeDeck URL was inspected.
+- Result: Root cause confirmed in `playSourceTrack`: it incremented the queue generation and replaced the visible queue without setting `queueActivationPending`. If the chosen ID was already current, `play()` took its same-track early return, skipping native activation, so Rust retained the old queue. Native old-generation snapshots could also win while an intent was pending because reconciliation only compared against the last accepted native snapshot. Source selection now marks activation pending; pending persists until matching native activation snapshot arrives (or browser/error terminal path), and `reconcilePlayerSnapshot` rejects snapshots older than the locally intended queue generation. Repeat mode updates the reactive state immediately and serializes native requests in click order, preserving the same full queue/index/generation; returned snapshots and native events use revision reconciliation. QueuePanel regression coverage verifies immediate A→B props, full queue/current selection across repeat cycling, queue row selection identity, stale-snapshot rejection, and native-generation acceptance. No CSS/styling or Rust changes were needed.
+- Blockers: none
+
+## Agent: visualizer-controls-persistence [Workload: IF-20261001-CONTROLS-01]
+
+- Workload ID: `IF-20261001-CONTROLS-01`
+- Task: Persistir estado aberto/fechado dos controles gerais
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: IF-20250925-CONTRACTS-01
+- Planned files:
+  - `src/interfaces/visualizer.ts`
+  - `src/visualizers/VisualizerControls.vue`
+  - `src/services/visualizer-preferences.ts`
+  - `src/services/visualizer-preferences.test.ts`
+  - `src/components/visualizer-controls.test.ts`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/interfaces/visualizer.ts`
+  - `src/visualizers/VisualizerControls.vue`
+  - `src/services/visualizer-preferences.ts`
+  - `src/services/visualizer-preferences.test.ts`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (12 files, 122 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader and UnsupportedContainer warnings)
+  - `cargo test`: pass (11 tests)
+  - `git diff --check`: pass (line-ending normalization notices)
+- Runtime validation: Automated bridge/controller tests cover default, native/browser fallback, open/close saves, refresh hydration, rapid writes and stale hydration/save responses. Actual Tauri WebView refresh persistence smoke not-run; available runtime does not expose the native Tauri bridge.
+- Result: Added typed `{ open, revision }` preference contracts, Rust load/save commands backed by `appLocalDataDir/settings/visualizer-controls.json`, monotonic revision rejection serialized by a native mutex, and startup rehydration in the controls component. Preserved the existing open default. Browser/unavailable-native behavior is explicitly volatile and stays in-memory. This is independent of audio-specific visualizer parameters. `App.vue` and `styles.css` were not edited.
+- Blockers: none
+
+## Agent: account-and-library-picker-ui [Workload: VIS-20261001-ACCOUNT-LIBRARY-01]
+
+- Workload ID: `VIS-20261001-ACCOUNT-LIBRARY-01`
+- Task: Ajustar header, conta e seletor local
+- Status: completed
+- Started: 2026-10-01
+- Finished: -
+- Depends on: IF-20261001-CONTROLS-01
+- Planned files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - testes visuais/bridge
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - `src/services/google-sync.ts`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (12 files, 122 tests; no new focused tests for this UI flow)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (11 tests)
+  - `git diff --check`: pass (LF/CRLF normalization warnings)
+- Runtime validation: `http://127.0.0.1:1420/` refused connection; desktop/mobile account and picker smoke not available.
+- Result: Header horizontal padding is overridden to 12px with zero vertical padding. Account card now toggles a single state-specific action; connect calls existing sync/login, disconnect invokes native cleanup of login WebView browsing data and stored YouTube/OAuth credential files before marking UI disconnected. Existing drop zone opens an accessible two-choice popover through the file-picker action; standalone folder button is hidden, and its folder picker uses the existing `directory: true, recursive: true` native dialog API. Browser path remains transient through file inputs; native drag/drop handlers unchanged.
+- Blockers: Requested interaction tests for menu choices/callbacks/outside/Escape and picker selection/cancellation were not added. Drop zone currently shares `openFilePicker()` and global popover, with `aria-expanded`/`aria-controls` on the account menu but not the picker trigger. Runtime smoke unavailable; UI accessibility/test hardening remains for coordinator follow-up.
+
+## Agent: account-picker-accessibility-tests [Workload: VIS-20261001-ACCOUNT-LIBRARY-02]
+
+- Workload ID: `VIS-20261001-ACCOUNT-LIBRARY-02`
+- Task: Testar menus e completar acessibilidade dos pickers
+- Status: cancelled
+- Started: 2026-10-01
+- Finished: -
+- Depends on: VIS-20261001-ACCOUNT-LIBRARY-01
+- Planned files:
+  - `src/App.vue`
+  - `src/components/AccountMenu.vue`
+  - `src/components/MusicPickerMenu.vue`
+  - `src/components/account-picker-accessibility.test.ts`
+  - `docs/visual-components.md` se necessário
+- Reserved files:
+  - none
+- Changed files:
+  - `src/components/AccountMenu.vue`
+  - `src/components/MusicPickerMenu.vue`
+  - `src/components/account-picker-accessibility.test.ts`
+- Tests:
+  - `npm test -- --run`: pass (13 files, 126 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `git diff --check`: pass (LF/CRLF normalization notices)
+- Runtime validation: Actual VibeDeck URL `http://localhost:1420/` account card open/Escape smoke passed; picker menu was not reached because current UI remains on the sources screen and no local playlist was available. Actual app menu wiring/accessibility changes are pending.
+- Result: Added testable AccountMenu/MusicPickerMenu implementations and 4 interaction tests covering connected/disconnected single-action menus, card click without sync, expanded-controls/labels, selection intent, outside/Escape dismissal, and Escape focus restoration. Existing `src/services/local-library.test.ts` verifies native file/folder dialog options and cancellation. Native auth callbacks remain parent-owned.
+- Blockers: Superseded by `VIS-20261001-ACCOUNT-LIBRARY-03`, which integrated these components into the active App.vue flow.
+
+## Agent: account-picker-live-integration [Workload: VIS-20261001-ACCOUNT-LIBRARY-03]
+
+- Workload ID: `VIS-20261001-ACCOUNT-LIBRARY-03`
+- Task: Conectar menus testados aos fluxos ativos
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: VIS-20261001-ACCOUNT-LIBRARY-01, VIS-20261001-ACCOUNT-LIBRARY-02
+- Planned files:
+  - `src/App.vue`
+  - `src/components/AccountMenu.vue`
+  - `src/components/MusicPickerMenu.vue`
+  - `src/services/`
+  - testes de integração account-picker
+- Reserved files:
+  - none (completed)
+- Changed files:
+- `src/App.vue`
+- `src/styles.css`
+- `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (13 files, 126 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `git diff --check`: pass (LF/CRLF normalization notices)
+- Runtime validation: `http://127.0.0.1:5173/` and `http://127.0.0.1:1420/` both refused connections; actual VibeDeck menu/native picker smoke and visual inspection were unavailable.
+- Result: Replaced App.vue's account and picker popovers with AccountMenu and MusicPickerMenu. Account events call existing Google sync/disconnect flows; disconnect updates state only after native cleanup succeeds. File/folder selection routes to the existing native picker, preserves browser fallback and treats an empty/cancelled selection as a no-op. Removed duplicate menu refs/listeners/handlers and global picker markup; existing drag/drop event handler remains on the track-list. The picker wrapper retains its drop-target highlight. Header 12px padding and account connected status remain in the active layout.
+- Blockers: none
+
+## Agent: local-playback-current-regression [Workload: PLAYER-20261001-LOCAL-04]
+
+- Workload ID: `PLAYER-20261001-LOCAL-04`
+- Task: Diagnosticar e corrigir playback local não funcional
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20250925-LOCAL-03, PLAYER-20250925-LOCAL-02
+- Planned files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/interfaces/`
+  - testes player/bridge
+- Reserved files:
+  - `src-tauri/src/lib.rs` (command/runtime activation path)
+  - `src-tauri/src/audio/engine.rs` (decoder/output startup handshake)
+  - `src/services/local-library.ts` (verified startup snapshot contract)
+  - `src/services/local-library.test.ts` (bridge regression)
+  - `src-tauri/src/local_library/mod.rs` (catalog/import contract regression)
+- Changed files:
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (13 files, 127 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (12 tests)
+  - `git diff --check`: pass (existing LF/CRLF normalization notices)
+- Runtime validation: `npm run tauri:debug` compiled and launched the Windows Tauri app; runtime logs showed an online AAC stream decoded and CPAL output stream started at 48 kHz stereo F32. The interactive command hit the 120s harness timeout; afterward CDP 9222 and app port 1420 refused connection. No local-file picker/import/playback could be driven, so no local file was verified through CPAL.
+- Result: Confirmed false-positive activation as the local-playback regression: native `play_local_audio` returned `isPlaying=true` immediately after spawning the playback worker; Symphonia probe/decode and CPAL stream construction/start occurred asynchronously, and startup failures only reached stderr. Added a bounded startup handshake so the command only returns success after `stream.play()` succeeds; probe/decoder/output-start failures return through the structured bridge error path. Frontend now requires a playing snapshot before changing to native-playing state. Verified file/folder picker emits false/true respectively; imports use native stable playlist ID `local-<hash>` and track ID `local-<content-hash>`, while the synthetic `local` view uses a different playlist context. The Rust resolver intentionally finds exact catalog track ID and managed path across playlists; activation queue context is independent, so the ID difference itself is not a playback mismatch. Added a managed import/catalog reference fixture test and bridge test rejecting a non-playing snapshot.
+- Blockers: Real local picker→catalog→CPAL playback and device/decoder runtime failure logging remain unverified without a live interactive Tauri session and local audio fixture. Startup failures are structured and surfaced; failures after CPAL has started still use native engine logging.
+
+## Agent: mascot-orbit-point-positions [Workload: VIS-20261001-ORBIT-01]
+
+- Workload ID: `VIS-20261001-ORBIT-01`
+- Task: Ajustar posições dos pontos da órbita
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: mascot-orbit-layer-alignment
+- Planned files:
+  - `src/styles.css`
+  - teste visual se necessário
+- Reserved files:
+  - none (completed)
+- Changed files:
+- `src/styles.css`
+- `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (13 files, 127 tests)
+  - `npm run build`: pass (existing large Serpents3D chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization notices)
+- Runtime validation: VibeDeck `http://127.0.0.1:1420/?theme=shui` in Chromium, desktop 1487x840 and mobile 390x844. Both reported orbit dimensions 247.34x247.34px and unchanged pseudo-element line insets (`19px -22px`, `-21px 20px`). Computed dot offsets match requested values: #1 top -2px/right 74px, #2 left 0px, #3 top 117.5px (= calc(50% - -23.5px))/right 19px. Layering retained at z-index 1/1/3. Actual transformed desktop dot rects: #1 x1107.40 y148.50, #2 x1060.64 y318.39, #3 x1203.16 y238.69; mobile: #1 x229.20 y148.50, #2 x182.44 y318.39, #3 x324.96 y238.69 (each about 9.11px square due to the orbit transform).
+- Result: Updated only the three `.hero-orbit` dot offsets requested; orbit line geometry, dot colors/layering, and responsive orbit rules remain intact. No focused CSS test was warranted for this declaration-only adjustment.
+- Blockers: none
+
+## Agent: serpents-weave-customization [Workload: VIS-20261001-SERPENTS-01]
+
+- Workload ID: `VIS-20261001-SERPENTS-01`
+- Task: Reestruturar cobras e controles customizáveis
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: visualizers-performance-defaults, visualizers-idle-animation
+- Planned files:
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/snake-visualizer-core.js`
+  - `src/visualizers/visualizer-performance.ts`
+  - controles/testes de Serpents3D
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/snake-visualizer-core.js`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (13 files, 127 tests; no new focused Serpents layout tests)
+  - `npm run build`: pass (existing 826.70 kB Serpents3D chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings)
+- Runtime validation: `http://localhost:1420/` loaded in browser, but only the disconnected home state was reachable; no Serpents WebGL desktop/mobile/drawer/background interaction smoke was performed.
+- Result: Changed the composition to ascending side lanes and descending center lanes with depth/phase weaving. Added add/remove and per-snake lane, horizontal position, depth, scale and phase controls. Geometry rebuild is event-driven, not per frame; count is capped at 8 and minimum 2.
+- Blockers: Native persistence, light-position controls and focused CPU-only layout/control tests remain unimplemented. Continue in a follow-up stage: add versioned Rust-backed Serpents preferences (snake array + light positions), then focused pure layout/bounds tests, then actual WebGL desktop/mobile and background/drawer smoke with the configured visualizer open.
+
+## Agent: serpents-lights-persistence-tests [Workload: VIS-20261001-SERPENTS-02]
+
+- Workload ID: `VIS-20261001-SERPENTS-02`
+- Task: Persistir cobras/luzes e testar layout
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: VIS-20261001-SERPENTS-01
+- Planned files:
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/serpents-layout.ts`
+  - testes CPU-only
+  - `src/interfaces/visualizer.ts`
+  - service de preferências visualizer
+  - `src-tauri/src/lib.rs`
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/visualizers/serpents-layout.ts`
+  - `src/visualizers/serpents-layout.test.ts`
+  - `src/interfaces/visualizer.ts`
+  - `src/services/serpents-preferences.ts`
+  - `src-tauri/src/lib.rs`
+  - `src/visualizers/snake-visualizer-core.js`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/services/serpents-preferences.test.ts`
+- Tests:
+  - `npm test -- --run`: pass (15 files, 134 tests)
+  - `npm run build`: pass (existing ~830 kB Serpents chunk warning)
+  - `cargo fmt --all -- --check`: pass (ran `cargo fmt --all` after initial check identified formatting)
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (12 tests)
+  - `git diff --check`: pass (line-ending normalization notices)
+- Runtime validation: `http://127.0.0.1:1420/` loaded normal disconnected sources view with no Tauri bridge (`__TAURI_INTERNALS__` absent), no Serpents canvas/open instance. `http://127.0.0.1:5173/` refused connection. Therefore native refresh persistence and actual WebGL light illumination/desktop-mobile/drawer/background smoke were not available; no WebGL validation is claimed. No query strings used.
+- Result: Added version-1 `{version, revision, snakes, lights}` preference contract; Rust `get_serpents_preference` / `set_serpents_preference` stores JSON under app-local `settings/serpents-preferences.json`, serializes writes, validates count/position ranges and rejects stale revisions. Service rehydrates safely after component startup, suppresses stale load completions, increments revisions on saves, and uses volatile default/in-memory state when Tauri is absent. CPU layout module provides stable six-snake/four-light defaults, count bounds (2–8 snakes, 1–8 lights), coordinate/scale/phase clamping and add/remove helpers. UI exposes bounded X/Y/Z key-light sliders and add/remove controls; renderer applies light positions/intensity, rebuilding lights only on config updates. Fixed missing default depth-profile selection so default route layout receives alternating depth profiles. No frame-time geometry reconstruction or analyzer fabrication added.
+- Blockers: none
+
+## Agent: serpents-general-controls-integration [Workload: VIS-20261001-SERPENTS-03]
+
+- Workload ID: `VIS-20261001-SERPENTS-03`
+- Task: Integrar controles de Serpentes aos controles gerais
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: VIS-20261001-SERPENTS-01, VIS-20261001-SERPENTS-02
+- Planned files:
+  - `src/visualizers/VisualizerControls.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/App.vue` se necessário
+  - testes de controles/Serpents
+- Reserved files:
+  - none (completed)
+- Changed files:
+- `src/services/serpents-preferences.ts`
+- `src/visualizers/Serpents3D.vue`
+- `src/visualizers/VisualizerControls.vue`
+- `src/components/visualizer-controls.test.ts`
+- `docs/visual-components.md`
+- `docs/agent-worklog.md`
+- Tests:
+-  - `npx vitest run src/components/visualizer-controls.test.ts src/visualizers/serpents-layout.test.ts src/services/serpents-preferences.test.ts`: pass (3 files, 11 tests)
+  - `npm test -- --run`: pass (15 files, 136 tests)
+  - `npm run build`: pass (existing Serpents3D chunk-size warning)
+  - `git diff --check`: pass (line-ending normalization notices)
+- Runtime validation: Actual VibeDeck at `http://127.0.0.1:1420/` loaded; source screen had no active track and no Serpents drawer instance, so drawer interaction, actual WebGL changes and Rust-backed refresh persistence were not exercised. Snapshot showed the VibeDeck UI; one existing console error was present.
+- Result: Shared controls show Serpentes > Cobras and Iluminação only for `kind=serpents`; snake lane/direction/X/depth/scale/phase and bounded add/remove (2–8), plus light add/remove/XYZ (1–8), remain in the shared preference flow. Removed all dead internal controls markup and its scoped CSS selectors/styles from Serpents3D.vue; the canvas now contains only the renderer host. Existing Rust version/revision persistence and shared reactive settings remain intact.
+- Blockers: none
+
+## Agent: playlist-selection-no-wrap [Workload: PLAYER-20261001-QUEUE-06]
+
+- Workload ID: `PLAYER-20261001-QUEUE-06`
+- Task: Fazer fila sem loop terminar no fim da playlist
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-04
+- Planned files:
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/App.vue`
+  - testes bridge/player sync se necessário
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/App.vue`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (15 files, 139 tests)
+  - `npm run build`: pass (existing 820.86 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer dead-code warnings)
+  - `cargo test -- --test-threads=1`: pass (12 Rust tests)
+  - `git diff --check`: pass (existing LF/CRLF normalization notices)
+- Runtime validation: Tauri smoke not-run; browser tab was `about:blank` with no authenticated live Tauri session or tracks available.
+- Result: Fixed two wrap paths. `createSelectedTrackQueue` now emits selected-to-tail for off/repeat-one and a rotated complete playlist only for playlist-repeat, always with queueIndex 0. `handleEnded` previously called manual navigation, whose modulo advance ignored repeat mode; it now uses `nextQueueIndex`, so off ends at the tail and repeat-one restarts only the current entry. Manual next/previous no longer wraps except in playlist-repeat. Repeat transitions rebuild off→playlist from the full owning playlist and trim playlist→track/off from the current entry onward, updating native generation and retaining the corrected full queue snapshot. No Rust schema change was needed: native activation and snapshots already serialize queue/index/repeat, and hydration preserves them. Tests cover selected positions 0/middle/last in all modes, exact order/count/index, natural/manual boundaries, repeat transitions, and hydration of a 249-track selected tail.
+- Blockers: none
+
+## Agent: player-end-of-queue-contract [Workload: PLAYER-20261001-QUEUE-07]
+
+- Workload ID: `PLAYER-20261001-QUEUE-07`
+- Task: Corrigir fim prematuro e repeat stale
+- Status: completed
+- Started: 2026-10-02 00:00
+- Finished: 2026-10-02 00:00
+- Depends on: PLAYER-20261001-QUEUE-06, IF-20250925-RECONNECT-01
+- Planned files:
+  - `src/interfaces/player.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/App.vue`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - testes player/bridge
+- Reserved files:
+  - none (released)
+- Changed files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (15 files, 144 tests)
+  - `npm run build`: pass (existing 820.86 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (15 tests)
+  - `git diff --check`: pass (existing LF/CRLF normalization notices)
+- Runtime validation: CDP opened only VibeDeck `http://localhost:1420/`; `window.__TAURI_INTERNALS__` was false, account disconnected, queue rows 0. Authenticated native playback and a real 3-track playlist were unavailable; no runtime claim made.
+- Result: Defined repeat terminal policy and end identity contracts. Repeat queue context now updates atomically in Rust; repeat playlist→off/track reconstructs from current track through the source playlist tail, omitting prefix tracks. Native position polls are discarded when track ID, queue generation, or index changed while awaiting. Added 3-track progression/stop, middle selection, wrap, repeat-one/manual skip, repeat-toggle prefix removal, stale end identity and Rust serde roundtrip coverage. Root cause of the reported second-track stop was not reproducible without the native authenticated runtime; queue/end identity reconciliation paths are hardened, while exact production trigger remains unconfirmed.
+- Blockers: none
+
+## Agent: player-short-queue-runtime-regression [Workload: PLAYER-20261001-QUEUE-08]
+
+- Workload ID: `PLAYER-20261001-QUEUE-08`
+- Task: Investigar fila runtime limitada a 2–3 faixas
+- Status: completed
+- Started: 2026-10-02 01:41
+- Finished: 2026-10-02 01:52
+- Depends on: PLAYER-20261001-QUEUE-07, PLAYER-20250927-PLAYLIST-E2E-06
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/player.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/playlist_catalog.rs`
+  - testes player/queue/runtime
+- Reserved files:
+  - none (released)
+- Changed files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/player-state.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run src/services/player-state.test.ts src/services/player-sync.test.ts`: pass (2 files, 51 tests)
+  - `npm test -- --run`: pass (15 files, 151 tests)
+  - `npm run build`: pass (existing Serpents3D 820.86 kB chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing GrowingReader/UnsupportedContainer warnings)
+  - `cargo test -- --test-threads=1`: pass (15 Rust tests)
+  - `git diff --check`: pass (existing LF/CRLF normalization notices)
+- Runtime validation: `http://localhost:1420/` opened VibeDeck but `window.__TAURI_INTERNALS__=false`, Google disconnected, and visible playlist tracks=0. Port 1420 already had listeners (PIDs 25784/25936), so `npm run tauri:debug` was not started. Runtime queue/catalog/snapshot/track-ended counts could not be observed; no authenticated source tracks were available. Static boundary path: hydrated catalog carries `tracks.length`, `continuation`, and `terminal`; frontend logs catalog totals and state, queues selected tracks only after terminal confirmation, and logs activation/snapshot/end counts and identity; Rust `PlayerActivation` and `PlayerSnapshot` preserve complete `queue`, index, source, generation and repeat policy. Rust does not emit an ended event; frontend advances native playback from position polling.
+- Result: Confirmed code-level trigger for a short queue: `play()` previously constructed the selected-to-tail queue immediately from the current `activePlaylist.tracks`, without checking an in-flight YouTube playlist pagination operation or `terminal`. If a click happened while only 2–3 tracks were hydrated, repeat-off correctly treated that incomplete prefix as the terminal queue and repeat could cycle that same prefix. Playback now joins/starts full pagination before source activation and blocks if terminal is not verified or the playlist changed. Added sanitized count/generation/repeat/track diagnostics at catalog hydration, queue build/activation, native snapshot, manual skip, and end/terminal transitions. Same-generation native snapshots can no longer shrink an owned queue; explicit replacement remains generation-scoped. Queue selections retain their intended index even with duplicate track IDs, and track rows use collision-free keys. Added five-track 0→1→2→3→4→stop, continued pagination tail, repeat-one/manual skip, duplicate end identity/track IDs, and stale-shrink regressions.
+- Blockers: The static root cause and regression are addressed, but production-runtime counts and authenticated playback remain unverified because the existing CDP page has no Tauri bridge/session/tracks.
+
+## Agent: player-loop-control-visual [Workload: VIS-20261001-LOOP-01]
+
+- Workload ID: `VIS-20261001-LOOP-01`
+- Task: Redesenhar aparência do controle de loop
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: none
+- Planned files:
+  - `src/styles.css`
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/styles.css`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: fail (108 passed, 2 failed in `src/services/player-state.test.ts`; existing coordinated player queue expectations disagree with `createSelectedTrackQueue` behavior)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `git diff --check -- src/styles.css docs/agent-worklog.md`: pass (LF/CRLF normalization notice)
+- Runtime validation: `http://localhost:1420/` desktop (1487x840) and mobile (390x844); page loaded. No current track was selected, so live repeat control was not rendered. Temporary DOM probes confirmed 40x40 dimensions, off/active contrast and in-viewport placement on both sizes. Loop-one badge is centered over icon. Browser also reports existing console error(s).
+- Result: Restyled the existing repeat control with 40px target, neutral off and lime active modes, centered loop-one badge, focus-visible ring, hover/pressed feedback and responsive mobile positioning. Existing title strings and click contract remain untouched; no playback state/transition code was edited.
+- Blockers: none
+
+## Agent: player-next-click-lost [Workload: PLAYER-20261001-NEXT-01]
+
+- Workload ID: `PLAYER-20261001-NEXT-01`
+- Task: Corrigir Próxima perdida entre faixas
+- Status: completed
+- Started: 2026-10-02
+- Finished: 2026-10-02
+- Depends on: PLAYER-20261001-QUEUE-08, PLAYER-20261001-QUEUE-07
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/player.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - testes player/bridge
+- Reserved files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/player.ts`
+  - `src/tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `docs/agent-worklog.md`
+- Changed files:
+-  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/player.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - player regression tests
+- Tests:
+  - `npm test -- --run`: pass (15 files, 155 tests)
+  - `npm run build`: pass (existing large Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass
+  - `cargo test -- --test-threads=1`: pass (16 tests)
+  - `git diff --check`: pass
+- Runtime validation: VibeDeck page opened at `http://localhost:1420/`, but `window.__TAURI_INTERNALS__` was false and no tracks/queue were loaded; native 2->3 transition not exercised.
+- Result: Added activation intent sequence, marked next activation pending before changing queue, removed redundant stop_audio race, rejected stale snapshots, and prevented end-position polling from racing manual next. Added tests for successive next transitions, stale response and recovery.
+- Blockers: authenticated native queue/audio runtime may be unavailable.
+
+## Agent: queue-panel-visual-tuning [Workload: VIS-20261001-QUEUE-02]
+
+- Workload ID: `VIS-20261001-QUEUE-02`
+- Task: Ajustar dimensões e fechamento do painel da fila
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: VIS-20261001-QUEUE-01
+- Planned files:
+  - `src/components/QueuePanel.vue`
+  - `src/styles.css`
+  - testes do QueuePanel
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/components/QueuePanel.vue`
+  - `src/styles.css`
+  - `src/components/queue-panel.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 106 tests)
+  - `npm run build`: pass (825 kB Serpents3D chunk warning)
+  - `git diff --check -- src/components/QueuePanel.vue src/components/queue-panel.test.ts src/styles.css docs/agent-worklog.md`: pass (existing LF/CRLF notice)
+- Runtime validation: Browser smoke not-run; both allowed URLs `http://127.0.0.1:1420/` and `http://127.0.0.1:5173/` refused connection. Responsive constraints, CSS dimensions, and click/Escape transitions covered by focused tests; desktop/mobile visual validation unavailable.
+- Result: Queue trigger is 34×34px, count badge is positioned at top -7px/right -16px, and panel offset is bottom 43px at desktop and mobile. An open-only viewport backdrop emits `update:open(false)` when clicked; the panel remains above it and handles its own row interactions. Existing lime styling, active-row indicator, focus/Escape, scroll, reduced motion, and responsive max-height/width are retained.
+- Blockers: none
+
+## Agent: player-repeat-shuffle-completeness [Workload: PLAYER-20261001-QUEUE-03]
+
+- Workload ID: `PLAYER-20261001-QUEUE-03`
+- Task: Fortalecer fila, shuffle, repeat e completude
+- Status: completed
+- Started: 2026-10-01
+- Finished: 2026-10-01
+- Depends on: PLAYER-20261001-QUEUE-01, PLAYER-20250927-PLAYLIST-E2E-06
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/playlist-loader.ts`
+  - `src-tauri/src/playlist_catalog.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - testes de fila/player/paginação
+- Reserved files:
+  - none (completed)
+- Changed files:
+  - `src/App.vue`
+  - `src/interfaces/player.ts`
+  - `src/services/player-state.ts`
+  - `src/services/player-state.test.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/services/google-sync.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/audio/mod.rs`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/src/playlist_catalog.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (11 files, 110 tests)
+  - `npm run build`: pass (existing 825 kB Serpents3D chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (existing `GrowingReader` and `UnsupportedContainer` warnings)
+  - `cargo test`: pass (11 tests, includes 629-track save/load/resume)
+  - `git diff --check`: pass (line-ending normalization notices only)
+- Runtime validation: `npm run tauri:debug` compiled/launched the Tauri executable. CDP later exposed VibeDeck at `http://localhost:1420/` and a YouTube Music `/library` WebView whose serialized playlist listing included `Just The Best` (`VLPLzr44Py-AqWvPI7e-l3ymsTWwn0wfTrcp`) but no track payloads (`tracks: []`). The Vite browser smoke showed the disconnected starting UI. No authenticated track-page request or 229/629 playback/count observation was available.
+- Result: Found a persistence-generation defect: each newer catalog generation cleared prior pages, while catalog hydration replaced the playlist's fetched tracks with saved tracks. Resumed pagination could therefore lose saved earlier pages on save/reload. Catalog generations now retain deduplicated prior pages, stale writes remain rejected, and terminal is set by the current provider page rather than latched. Added native snapshot repeat mode and typed repeat update carrying the current queue/index/generation. Source-track activation now builds selected-to-tail queue; repeat mode changes rebuild queue immediately; shuffle activation preserves the shuffled queue; queue-panel activation remains on internal queue. Visible playlist navigation does not replace the queue.
+- Blockers: Exact live cause/count for the observed 229-versus-629 cannot be confirmed without an authenticated Just The Best track-page response. The WebView exposed playlist identity only, not its track continuation/catalog payload.
+
+## Agent: player-interface-flows-audio-native [Workload: PLAYER-20250925-LOCAL-02]
+
+- Workload ID: `PLAYER-20250925-LOCAL-02`
+- Task: Corrigir reprodução nativa de faixas locais persistidas após importação e reidratação.
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src-tauri/src/local_library/mod.rs`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/audio/mod.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (9 files, 69 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass (2 existing/dead-code warnings)
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass (line-ending warnings only)
+- Runtime validation: native Tauri import/restart/audio-device smoke not-run in this environment.
+- Result: Local playback now validates the managed catalog path, container and decoder, checks output availability, preserves typed failure categories, initializes known duration, and rejects stale activation at the bridge. Browser object URLs remain only for non-Tauri transient imports.
+- Blockers: none
+
+## Agent: local-drop-folder-flow
+
+- Task: Corrigir extração de caminhos nativos no drag/drop e adicionar seletor nativo de pastas
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: local-library-frontend-flow
+- Planned files:
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src/App.vue`
+  - `package.json`
+  - `package-lock.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/capabilities/default.json`
+  - `docs/interface-flows.md`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src/App.vue`
+  - `package.json`
+  - `package-lock.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/capabilities/default.json`
+  - `docs/interface-flows.md`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src/App.vue`
+  - `src/styles.css`
+  - `package.json`
+  - `package-lock.json`
+  - `src-tauri/Cargo.toml`
+  - `src-tauri/Cargo.lock`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/capabilities/default.json`
+  - `docs/interface-flows.md`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (7 files, 41 tests)
+  - `npm test -- --run src/services/local-library.test.ts`: pass (11 tests)
+  - `npm run build`: pass (known large Three.js chunk warning)
+  - `cargo check`: pass
+  - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: native Tauri drag/drop and folder-picker smoke not-run; packaged desktop runtime unavailable
+- Result: Normalized Tauri drag/drop payload variants, added the Tauri dialog file/folder picker, and retained a transient browser File fallback with object URL cleanup.
+- Blockers: none
+
+## Agent: visual-components
+
+- Task: Corrigir acessibilidade e estados do painel de controles
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/VisualizerControls.vue`
+- Reserved files:
+  - `src/components/VisualizerControls.vue`
+- Changed files:
+  - `src/components/VisualizerControls.vue`
+- Tests:
+  - `npx vitest run src/components/visualizer-controls.test.ts`: pass
+  - `npx vue-tsc --noEmit`: pass
+- Runtime validation: not-run
+- Result: Added finite clamping, accessible labels, focus-visible behavior, and button types.
+- Blockers: `FrequencyRangeControl.vue` still needs standalone validation hardening.
+
+## Agent: interface-flows
+
+- Task: Fortalecer paginação e terminal conditions
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+   - `src/services/playlist-loader.ts`
+- Reserved files:
+  - `src/services/playlist-loader.ts`
+- Changed files:
+  - `src/services/playlist-loader.ts`
+- Tests:
+  - `npm test -- --run src/services/playlist-loader.test.ts`: pass
+- Runtime validation: not-run
+- Result: Added page limit and explicit terminal reasons.
+- Blockers: App integration, cancellation, and stale-response protection remain.
+
+## Agent: visualizers
+
+- Task: Corrigir histórico e estado do espectrograma
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/VisualizerCanvas.vue`
+- Reserved files:
+  - `src/components/VisualizerCanvas.vue`
+- Changed files:
+  - `src/components/VisualizerCanvas.vue`
+- Tests:
+  - `npm test -- --run`: pass
+  - `npm run build`: pass
+- Runtime validation: not-run
+- Result: Added timestamped spectrogram columns, cadence-safe history, paused freeze, and tooltip clamping.
+- Blockers: Native FFT sample-rate mapping and analyzer allocation issues remain.
+
+## Agent: youtube-api-analysis
+
+- Task: Tipar e documentar contrato de paginacao YouTube
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/services/google-sync.ts`
+- Reserved files:
+   - `src/services/google-sync.ts`
+- Changed files:
+  - `src/services/google-sync.ts`
+- Tests:
+  - `npm test -- --run src/services/google-sync.test.ts`: pass
+  - `npx vue-tsc --noEmit`: pass
+- Runtime validation: not-run
+- Result: Added typed stream validation and normalized bridge errors.
+- Blockers: Rust/WebView structs, fixtures, and runtime contract tests remain.
+
+## Agent: visual-components-review
+
+- Task: Revisar artwork do heading do visualizador
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Reserved files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Changed files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Tests:
+  - `npm test -- --run src/components/visualizer-track-artwork.test.ts`: pass
+  - `npx vue-tsc --noEmit`: pass
+  - `npm run build`: pass
+- Runtime validation: not-run
+- Result: Preserved no-artwork layout, aligned artwork, keyed transitions by track id, and hardened Teleport cleanup.
+- Blockers: Runtime/Tauri visual validation remains pending.
+
+## Agent: visual-components-checkup
+
+- Task: Check-up geral da arquitetura visual
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - none (research only)
+- Reserved files:
+  - none
+- Changed files:
+  -
+- Tests:
+-  - `npm test`: pass
+  - `npm run build`: pass
+- Runtime validation: not-run
+- Result: Identified fragile Teleport targets, legacy loading CSS, multiple Canvas previews, and recommended component organization.
+- Blockers: none
+
+## Coordinator: settings-black-screen-fix
+
+- Task: Corrigir tela preta ao abrir o painel de visualizador
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: interface-flows-web-guard
+- Planned files:
+  - `src/components/Serpents3D.vue`
+- Reserved files:
+  - `src/components/Serpents3D.vue`
+- Changed files:
+  - `src/components/Serpents3D.vue`
+- Tests:
+  - `npm test -- --run`: pass, 5 files and 10 tests
+  - `npm run build`: pass, with existing large Three.js chunk warning
+  - `git diff --check`: pass, with expected LF/CRLF warnings
+- Runtime validation: Browser smoke test passed. `body` remains `display: block`; settings panel, four visualizer cards, and canvases render with non-zero dimensions. No runtime errors; favicon 404 remains.
+- Result: Fixed Vue scoped CSS global selector so developer-only Serpents controls are hidden without applying `display: none` to `body`.
+- Blockers: none
+
+## Coordinator: transparent-playlist-loading
+
+- Task: Tornar fundo do loading transparente
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Reserved files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Changed files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Tests:
+-  - `npm run build`: pass, with existing large Three.js chunk warning
+- Runtime validation: not run
+- Result: Loading overlay now uses a transparent background while retaining its content and spinner styling.
+- Blockers: none
+
+## Agent: visualizer-serpents-background
+
+- Task: Validar background do visualizer de serpentes
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24 22:29
+- Depends on: none
+- Planned files:
+  - `src/components/Serpents3D.vue`
+- Reserved files:
+  - `src/components/Serpents3D.vue`
+- Changed files:
+  -
+- Tests:
+  - `npm run build`: pass before handoff
+  - Runtime background/layout smoke: pending
+- Runtime validation: pending
+- Result: Review and validate the foreground/background positioning fix delegated to the visualizer subagent.
+- Blockers: none
+
+## Agent: visualizers-src-folder
+
+- Task: Organizar visualizers em pasta própria
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: visualizer-serpents-background
+- Planned files:
+  - `src/visualizers/`
+  - imports/tests afetados pela movimentação
+- Reserved files:
+  - `src/components/VisualizerCanvas.vue`
+  - `src/components/VisualizerControls.vue`
+  - `src/components/VisualizerPicker.vue`
+  - `src/components/VisualizerTrackArtwork.vue`
+  - `src/components/Serpents3D.vue`
+  - `src/components/snake-visualizer-core.js`
+  - `src/components/visualizer-track-artwork.test.ts`
+  - `src/components/visualizer-controls.test.ts`
+  - `src/App.vue`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/components/visualizer-controls.test.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/VisualizerControls.vue`
+  - `src/visualizers/VisualizerPicker.vue`
+  - `src/visualizers/VisualizerTrackArtwork.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/snake-visualizer-core.js`
+  - `src/visualizers/visualizer-track-artwork.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (5 files, 10 tests)
+  - `npm run build`: pass (large Three.js chunk warning)
+  - `git diff --check`: pass (LF/CRLF warnings only)
+- Runtime validation: not-run; stale active-import scan completed, with only the intentional backup prototype and historical worklog paths remaining.
+- Result: Moved visualizer components, core, and artwork test into `src/visualizers`, updated active imports, and preserved Serpents3D playlist background positioning.
+- Blockers: none
+
+## Agent: mascot-audio-response-study
+
+- Task: Investigar resposta musical do visualizer mascote
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24 22:06
+- Depends on: visualizers-src-folder
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/VisualizerControls.vue`
+  - `src/visualizers/visualizer-track-artwork.test.ts`
+- Reserved files:
+  - `src/App.vue`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pass (5 files, 10 tests)
+- Runtime validation: not-run; native CPAL/Tauri audio and visual response require runtime validation with representative tracks.
+- Result: Data path and tuning analysis completed. Found incompatible UI Hz-to-index mapping versus Rust FFT bands, unused Mascot smoothing prop, per-frame relative normalization causing cross-reactivity, volume compensation clipping, and analyzer state not reset per track. Proposed separated bass transient, voice band, and energy envelopes with explicit sample-rate/band metadata and deterministic core tests.
+- Blockers: no code changes in this analysis phase; browser/Tauri runtime validation remains required before tuning constants are accepted.
+
+## Agent: interface-flows-web-guard
+
+- Task: Proteger bridge de logs fora do runtime Tauri
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/services/app-logs.ts`
+- Reserved files:
+  - `src/services/app-logs.ts`
+- Changed files:
+  - `src/services/app-logs.ts`
+- Tests:
+-  - `npm test -- --run`: pass
+  - `npm run build`: pass
+- Runtime validation: web preview smoke pass
+- Result: Added runtime capability guard and no-op unlisten fallback outside Tauri.
+- Blockers: none
+
+## Agent: mascot-audio-response-implementation
+
+- Task: Implementar envelopes musicais independentes do mascote
+- Status: cancelled
+- Started: 2026-09-24
+- Finished: 2026-09-25
+- Depends on: mascot-audio-response-study
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/VisualizerControls.vue`
+  - testes relacionados ao core do mascote
+- Reserved files:
+   - `src-tauri/src/local_library/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `src-tauri/Cargo.toml`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: pending; browser/Tauri smoke recommended
+- Result: Apply independent bass/beat, voice, and energy envelopes. All three mascot arcs must support forward/back depth movement; red is not the only depth-reactive arc.
+- Blockers: none
+
+## Agent: mascot-audio-response-implementation-v2
+
+- Task: Implementar resposta global de profundidade do mascote
+- Status: cancelled
+- Started: 2026-09-24
+- Finished: -
+- Depends on: mascot-audio-response-study
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/VisualizerControls.vue`
+  - testes relacionados ao core do mascote
+- Reserved files:
+   - `src/services/playlist-loader.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/App.vue`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: pending; browser/Tauri smoke recommended
+- Result: Superseded by `mascot-audio-response-contract` and later Mascot response flows, which implemented and validated the corrected behavior contract.
+- Blockers: none
+
+## Agent: mascot-beat-sync
+
+- Task: Reduzir lag e usar beat na profundidade
+- Status: cancelled
+- Started: 2026-09-24
+- Finished: -
+- Depends on: mascot-audio-response-implementation-v2
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes de resposta do mascote
+- Reserved files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: pending; browser/Tauri audio smoke recommended
+- Result: Superseded by `mascot-beat-sync-coordinator`, which implemented and validated the beat/transient depth driver.
+- Blockers: none
+
+## Agent: mascot-smoothing-tune
+
+- Task: Suavizar flick do Mascot
+- Status: cancelled
+- Started: 2026-09-24 22:27
+- Finished: -
+- Depends on: mascot-beat-sync
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/mascot-audio-response.test.ts`
+- Reserved files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/mascot-audio-response.test.ts`
+- Changed files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (6 files, 20 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: not-run; representative Tauri/browser audio smoke remains required to tune against real tracks.
+- Result: Superseded by later Mascot stability and cadence flows that incorporated the smoothing/deadband work and added regression coverage.
+- Blockers: none
+
+## Agent: mascot-wave-stability
+
+- Task: Estabilizar flick entre ondas próximas
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24 22:37
+- Depends on: mascot-smoothing-tune
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes do Mascot
+- Reserved files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (6 files, 21 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: not-run; browser/Tauri audio smoke with representative tracks remains required
+- Result: Made arc identity explicit and amplitude-independent, preserving fixed bass/red, voice/purple, and energy/green roles. Added a near-equal crossing regression test.
+- Blockers: none
+
+## Agent: mascot-update-cadence
+
+- Task: Investigar perda de tracking do Mascot e ajustar polling do analyzer sem sobreposição
+- Status: completed
+- Started: 2026-09-24 22:39
+- Finished: 2026-09-24 22:42
+- Depends on: mascot-wave-stability
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/App.vue`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/App.vue` (first edit)
+  - `src/visualizers/mascot-audio-response.ts` (sequential)
+  - `docs/visualizers.md` (sequential)
+- Changed files:
+  - `src/App.vue`
+  - `src/visualizers/mascot-audio-response.ts`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (6 files, 21 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: Tauri audio runtime not available; native analyzer path inspected statically. Browser visual runtime not run.
+- Result: Confirmed native 1024-sample FFT hops at about 21-23 ms, kept rendering on requestAnimationFrame, changed UI polling from 20 ms to 33 ms, retained the no-overlap guard, and discarded late responses from older track generations. Updated the visualizer contract and Mascot timing comment.
+- Blockers: none
+
+## Agent: mascot-red-particle-alignment
+
+- Task: Alinhar bolinha vermelha do Mascot
+- Status: cancelled
+- Started: 2026-09-25
+- Finished: -
+- Depends on: mascot-update-cadence
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes do Mascot se necessário
+- Reserved files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `docs/agent-worklog.md`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: browser visual smoke pending
+- Result: Investigate screenshot where the red particle drifts outside its orbit/line while other mascot particles remain aligned.
+- Blockers: none
+
+## Agent: mascot-red-particle-component-fix
+
+- Task: Corrigir alinhamento visual da bolinha vermelha
+- Status: cancelled
+- Started: 2026-09-25
+- Finished: -
+- Depends on: mascot-red-particle-alignment
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes visuais/componentes se necessário
+- Reserved files:
+   - `src-tauri/src/playlist_catalog.rs`
+   - `src-tauri/src/lib.rs`
+   - `src/services/playlist-loader.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src/App.vue`
+   - `src/interfaces/library.ts`
+   - `src/interfaces/player.ts`
+   - `docs/agent-worklog.md`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: browser visual smoke pending
+- Result: Component-focused investigation of the red mascot particle escaping its orbit, based on the supplied screenshot.
+- Blockers: none
+
+## Agent: mascot-red-particle-visualizer-fix
+
+- Task: Corrigir geometria da bolinha vermelha
+- Status: cancelled
+- Started: 2026-09-25
+- Finished: -
+- Depends on: mascot-red-particle-alignment
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes do Mascot se necessário
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: browser visual smoke pending
+- Result: Visualizer-focused investigation of the red dot escaping its orbit/line, preserving beat response and shared depth.
+- Blockers: none
+
+## Agent: mascot-red-particle-component-fix-v2
+
+- Task: Corrigir bolinha no componente visual
+- Status: cancelled
+- Started: 2026-09-25
+- Finished: -
+- Depends on: mascot-red-particle-alignment
+- Planned files:
+  - componente visual responsável pela órbita/bolinha
+  - teste visual relacionado, se necessário
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  -
+- Tests:
+  - `npm test -- --run`: pending
+  - `npm run build`: pending
+- Runtime validation: browser visual smoke pending
+- Result: Superseded by `mascot-orbit-layer-alignment` and `mascot-red-particle-component-fix-v3`, which completed the component geometry correction.
+- Blockers: none
+
+## Agent: current-track-list-indicator
+
+- Task: Melhorar indicador da faixa atual
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 01:00
+- Depends on: none
+- Planned files:
+  - componente visual da lista de faixas, provavelmente `src/App.vue` e `src/styles.css`
+  - teste de componente se aplicável
+- Reserved files:
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (6 files, 21 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on 1440x900 and 390x844; page layout and player surfaces rendered, console had no errors. Current-row state could not be exercised because the non-Tauri runtime has no loaded playlist track and shows the existing bridge invoke warning.
+- Result: Replaced inline current-row styling with lime-accented row, index capsule, triangle marker, explicit playing bars, aria-current and paused/playing announcement; documented the track-row state rule.
+- Blockers: Tauri/runtime fixture with a loaded playlist track is still needed for end-to-end current-row rendering.
+
+## Agent: mascot-orbit-layer-alignment
+
+- Task: Reorganizar linhas e bolinhas da órbita
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 00:52
+- Depends on: mascot-red-particle-component-fix-v2
+- Planned files:
+  - componente visual da órbita, provavelmente `src/styles.css`
+  - teste visual se aplicável
+- Reserved files:
+  - `src/styles.css`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/styles.css`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (6 files, 21 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on desktop and 390x844 viewport. Computed geometry confirmed red on `::before`, green on the base circle, purple on `::after`; z-index layers are 1, 1, and 3 respectively.
+- Result: Assigned each orbit dot to its own ellipse/layer, corrected the red and green coordinates to the actual border geometry, and made the foreground pseudo-element/dot stacking explicit. No focused CSS test added because the regression is pixel geometry best validated through computed browser layout.
+- Blockers: none
+
+## Agent: visualizer-drawer-canvas-space
+
+- Task: Expandir Canvas no drawer do visualizer
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 01:04
+- Depends on: none
+- Planned files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/Serpents3D.vue` se o contrato de layout compartilhado exigir
+   - `src/styles.css`
+- Reserved files:
+   - `src/styles.css`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/styles.css`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (6 files, 21 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Browser CSS smoke passed at `http://127.0.0.1:5173/?theme=shui` on 1440x900 and 390x844 using a drawer fixture; Canvas and shell matched content dimensions, overflow stayed hidden, and no browser errors were emitted.
+- Result: Corrected the root-shell selector and moved Canvas/Serpents3D drawer renderers into a full-size background layer. Heading/status remain above it and controls retain their overlay layer; playlist background selectors were unchanged.
+- Blockers: none
+
+## Agent: visualizers-performance-defaults [Workload: VIS-20250925-60FPS-01]
+
+- Workload ID: `VIS-20250925-60FPS-01`
+- Task: Padronizar performance e qualidade dos visualizers
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src/visualizers/`
+  - `src/App.vue` somente se contratos/defaults exigirem
+  - testes de performance/configuração
+- Reserved files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/Serpents3D.vue`
+   - `src/visualizers/snake-visualizer-core.js`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `src/App.vue`
+   - `docs/visualizers.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/Serpents3D.vue`
+   - `src/visualizers/snake-visualizer-core.js`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `src/App.vue`
+   - `docs/visualizers.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (8 files, 46 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: browser smoke passed at `http://127.0.0.1:1420/?theme=shui` on desktop and 390x844 mobile; settings visualizer panel and spectrogram preview opened, all canvases had non-zero CSS/pixel dimensions. Live audio FPS was not measurable without a Tauri/native audio session. Existing favicon 404 and Three.js preview warnings remained.
+- Result: Target ~60 FPS/16.6ms for all visualizers with smooth responsiveness and medium-high default quality for modern displays.
+- Blockers: none
+
+## Agent: logs-visualizer-flow
+
+- Task: Analisar Logs e minimização do visualizer
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 01:16
+- Depends on: none
+- Planned files:
+   - `src/App.vue`
+   - `src/styles.css`
+- Reserved files:
+   - `src/App.vue`
+   - `src/styles.css`
+- Changed files:
+   - `src/App.vue`
+   - `src/styles.css`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (6 files, 23 tests)
+   - `npm run build`: pass (known large Three.js chunk warning)
+   - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on 1440x900; Logs rendered, `logs-open` was active, no visualizer drawer remained in the DOM, computed margins were Logs `auto`, Configurações `0px`, account `0px`, and no console errors were emitted. The non-Tauri bridge still displays its existing invoke warning outside Tauri.
+- Result: Opening Logs now closes the visualizer state and immediately suppresses the drawer overlay; only the Logs control receives the automatic topbar margin, preserving Configurações and account alignment.
+- Blockers: none
+
+## Agent: single-page-playlist-flow
+
+- Task: Corrigir playlist de uma única página
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src/services/playlist-loader.ts`
+  - `src/App.vue` se necessário
+- Reserved files:
+   - `src-tauri/src/lib.rs`
+- Changed files:
+   - `src/services/playlist-loader.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src/App.vue`
+   - `src-tauri/src/lib.rs`
+   - `docs/youtube-api-registry.md`
+- Tests:
+-   - `npm test -- --run`: pass (6 files, 23 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Tauri/YouTube runtime not-run; native bridge and authenticated WebView require a live session.
+- Result: Added an explicit `{ tracks, hasMore }` page contract, stopped terminal embedded pages before continuation, preserved initial tracks during pagination, rejected stale playlist openings, and retained multi-page loading.
+- Blockers: none
+
+## Agent: local-library-storage-design
+
+- Task: Analisar biblioteca local e armazenamento
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src-tauri/src/`
+  - `src/services/`
+  - `src/App.vue`
+- Reserved files:
+  -
+- Changed files:
+  - `docs/agent-worklog.md`
+- Tests:
+  - not-run (research-only task)
+- Runtime validation: not-run; Tauri filesystem/drop runtime was not exercised and no application files were edited.
+- Result: Researched the current local-library model, App.vue browser-only file/drop flow, Tauri command registration, persistence, audio boundary, and Cargo dependencies. Recommended an appLocalDataDir-managed library with Rust-owned import/copy/catalog commands, atomic writes, content-based duplicate detection, explicit cancellation/generation contracts, and playlist-scoped metadata. Full findings and exact contracts were reported to the coordinator.
+- Blockers: implementation must be coordinated with the App.vue agents; no current Rust filesystem command or durable local-library catalog exists.
+
+## Agent: local-library-rust-backend
+
+- Task: Implementar backend nativo da biblioteca local
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: local-library-storage-design
+- Planned files:
+  - `src-tauri/src/local_library/`
+  - `src-tauri/src/lib.rs`
+  - `src-tauri/Cargo.toml` somente se necessário
+- Reserved files:
+   - `src-tauri/src/local_library/mod.rs`
+   - `src-tauri/src/lib.rs`
+- Changed files:
+   - `src-tauri/src/local_library/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `cargo test`: pass (4 tests)
+   - `cargo check`: pass
+   - `cargo fmt --check`: not clean because existing `src-tauri/src/lib.rs` formatting drift predates this flow; new module formatted with `rustfmt`
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri filesystem smoke not run; requires a packaged/live Tauri runtime and frontend invocation.
+- Result: Implemented appLocalDataDir-managed catalog/import/remove commands with versioned typed contracts, recursive enumeration, atomic temp-copy/catalog replacement, path safety, extension filtering, content+length deduplication, cancellation/progress operation IDs, stale metadata detection, and corrupt-catalog preservation.
+- Blockers: frontend service/App.vue integration remains for the next flow.
+
+## Agent: mascot-red-particle-component-fix-v3
+
+- Task: Corrigir alinhamento visual do ponto vermelho no orbit decorativo
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src/styles.css`
+- Reserved files:
+  - `src/styles.css`
+- Changed files:
+  - `src/styles.css`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (6 files, 21 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF normalization warnings)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on desktop and 390x844 viewport; orbit and red dot rendered with the corrected computed position. Existing favicon 404 and project-wide mobile min-width overflow remain.
+- Result: Moved the red orbit span from `left: 17px; bottom: 20px` to `left: 22px; bottom: 27px`, bringing it back onto the intended orbit without touching Mascot audio analysis, Canvas rendering, animation, or response logic.
+- Blockers: none
+
+## Agent: local-library-frontend-flow
+
+- Task: Integrar biblioteca local no frontend
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 01:36
+- Depends on: local-library-rust-backend
+- Planned files:
+  - `src/models/`
+  - `src/services/local-library.ts`
+  - `src/App.vue`
+  - testes de bridge/fluxo
+- Reserved files:
+   - `src/models/library.ts`
+   - `src/services/local-library.ts`
+   - `src/services/local-library.test.ts`
+   - `src/App.vue`
+   - `src/styles.css`
+   - `docs/interface-flows.md`
+   - `docs/visual-components.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/models/library.ts`
+   - `src/services/local-library.ts`
+   - `src/services/local-library.test.ts`
+   - `src/App.vue`
+   - `src/styles.css`
+   - `docs/interface-flows.md`
+   - `docs/visual-components.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (7 files, 26 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+   - `cargo check`: pass (existing `GrowingReader` dead-code warning)
+- Runtime validation: Tauri drag/drop and restart smoke not-run; native runtime/device unavailable
+- Result: Connected appLocalDataDir catalog loading, managed playlist restoration, Tauri native path drag/drop/import progress, browser-only transient fallback, partial-result summaries, cancellation, and stale generation protection. Persisted local items contain metadata and managed relative paths only.
+- Blockers: persisted local playback is not supported by the current audio bridge; follow-up native command is required.
+
+## Agent: local-library-native-playback
+
+- Task: Adicionar playback nativo de faixas gerenciadas
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 01:43
+- Depends on: local-library-frontend-flow
+- Planned files:
+  - `src-tauri/src/`
+  - bridge de áudio frontend
+  - `src/App.vue` se necessário
+- Reserved files:
+   - `src-tauri/src/local_library/mod.rs`
+ - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/local_library/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `src/services/local-library.ts`
+   - `src/services/local-library.test.ts`
+   - `src/App.vue`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src-tauri/src/local_library/mod.rs`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/lib.rs`
+   - `src/services/local-library.ts`
+   - `src/services/local-library.test.ts`
+   - `src/App.vue`
+- Tests:
+   - `cargo fmt --all -- --check`: pass
+   - `cargo check`: pass
+   - `cargo test`: pass (4 tests)
+   - `npm test -- --run`: pass (7 files, 27 tests)
+   - `npm run build`: pass (known large Three.js chunk warning)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri local playback smoke not-run; requires a packaged/live runtime, managed audio fixture, and audio device.
+- Result: Added catalog-resolved local playback with canonical root/file validation, typed path/container errors, shared Symphonia/CPAL state and controls, and frontend playback routing for persisted local tracks.
+- Blockers: no runtime smoke was possible in this environment; existing `GrowingReader` dead-code warning remains.
+
+## Agent: mascot-beat-sync-coordinator
+
+- Task: Corrigir sincronizacao do mascote com envelope de beat e reduzir latencia percebida
+- Status: completed
+- Started: 2026-09-24 22:20
+- Finished: 2026-09-24 22:24
+- Depends on: none
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (6 files, 18 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (LF/CRLF warnings only)
+- Runtime validation: not-run; browser/Tauri audio smoke remains required for representative tracks
+- Result: Shared mascot depth now follows the transient beat envelope, first sustained bass frame is baseline-only, and unchanged analyzer arrays are not cloned every animation frame.
+- Blockers: none
+
+## Agent: mascot-audio-response-contract
+
+- Task: Implementar resposta de audio corrigida do mascote
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24 22:14
+- Depends on: mascot-audio-response-study
+- Planned files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Reserved files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/mascot-audio-response.ts`
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+-  - `npm test -- --run`: pass (6 files, 16 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (existing LF/CRLF warnings only)
+- Runtime validation: not-run; Tauri/browser audio response requires representative runtime tracks
+- Result: Added a shared bass-driven depth multiplier for all three arcs, independent bass/voice/energy envelopes, transient bass attack with slow release, time-based smoothing, and silence-safe no-data behavior. Preserved the existing render-loop pause semantics.
+- Blockers: none
+
+## Agent: visual-components-loading
+
+- Task: Corrigir componente de loading da playlist
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Reserved files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Changed files:
+  - `src/components/PlaylistLoadingOverlay.vue`
+- Tests:
+-  - `npm test -- --run`: pass
+  - `npm run build`: pass
+- Runtime validation: not-run
+- Result: Added configurable Teleport target, accessible status semantics, visible local layout, and reduced-motion support.
+- Blockers: none
+
+## Agent: visual-components-settings
+
+- Task: Corrigir tela preta das configurações de visualizadores
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/VisualizerPicker.vue`
+- Reserved files:
+  - `src/components/VisualizerPicker.vue`
+- Changed files:
+  - `src/components/VisualizerPicker.vue`
+- Tests:
+-  - `npm test -- --run`: pass
+  - `npm run build`: pass
+- Runtime validation: not-run
+- Result: Added stable Teleport target resolution, deferred preview mounting, mutation recovery, and preview fallback.
+- Blockers: none
+
+## Agent: visual-components-alignment
+
+- Task: Corrigir alinhamento vertical da capa do heading
+- Status: completed
+- Started: 2026-09-24
+- Finished: 2026-09-24
+- Depends on: none
+- Planned files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Reserved files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Changed files:
+  - `src/components/VisualizerTrackArtwork.vue`
+- Tests:
+  - `npm test -- --run src/components/visualizer-track-artwork.test.ts`: pass
+- Runtime validation: not-run
+- Result: Artwork now uses the full heading block center instead of the heading top.
+- Blockers: Runtime/Tauri visual validation remains pending.
+
+## Agent: player-queue-isolation
+
+- Task: Isolar fila e contexto de playlists
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 11:26
+- Depends on: none
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-state.ts` se aplicável
+  - testes de fila/player
+- Reserved files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/Serpents3D.vue`
+   - `src/visualizers/snake-visualizer-core.js`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `src/App.vue`
+   - `docs/visualizers.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/App.vue`
+   - `src/services/player-state.ts`
+   - `src/services/player-state.test.ts`
+   - `src/services/playlist-loader.ts`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (7 files, 43 tests)
+   - `npm run build`: pass
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri/YouTube rapid playlist-switch smoke not-run; requires authenticated native WebView.
+- Result: Queue ownership now carries playlist id, generation, copied tracks, and active index; playlist switches rebuild the complete queue only for the active playlist, and stale pagination cannot append across generations.
+- Blockers: none
+
+## Agent: player-stream-cancellation
+
+- Task: Cancelar streams antigos no skip
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 11:26
+- Depends on: none
+- Planned files:
+  - `src/App.vue`
+  - `src/services/google-sync.ts`
+  - `src-tauri/src/` stream/audio bridge
+- Reserved files:
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/App.vue`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (7 files, 43 tests)
+   - `npm run build`: pass
+   - `cargo check`: pass
+   - `cargo test`: pass (4 tests)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri/YouTube rapid skip and timeout smoke not-run; native audio device and authenticated stream broker unavailable.
+- Result: Added AbortSignal checks around stream resolution/native playback, request-generation guards for stale success/error, and native stop-before-replacement behavior without Rust command changes.
+- Blockers: none
+
+## Agent: player-pagination-regression
+
+- Task: Corrigir terminal da paginação contínua
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 11:24
+- Depends on: single-page-playlist-flow
+- Planned files:
+  - `src/services/playlist-loader.ts`
+  - `src/App.vue`
+  - `src-tauri/src/lib.rs` se necessário
+  - testes de paginação
+- Reserved files:
+   - `src/services/playlist-loader.ts`
+   - `src/services/playlist-loader.test.ts`
+   - `src/App.vue`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Changed files:
+-   - `src/services/playlist-loader.ts`
+-   - `src/services/playlist-loader.test.ts`
+-   - `src/App.vue`
+-   - `src-tauri/src/lib.rs`
+- Tests:
+   - `npm test -- --run`: pass (7 files, 41 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `cargo check`: pass (existing `GrowingReader` dead-code warning)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: not-run; live Tauri/WebView playlist smoke was unavailable
+- Result: Ensure the final continuation is fetched and appended without regressing single-page terminal handling.
+- Blockers: none
+
+## Agent: app-webview-identity
+
+- Task: Identificar WebViews e árvore de processos
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25 11:22
+- Depends on: none
+- Planned files:
+   - `src-tauri/tauri.conf.json`
+   - `src-tauri/src/`
+   - `src-tauri/Cargo.toml` se necessário
+- Reserved files:
+   - `docs/agent-worklog.md`
+   - `src-tauri/tauri.conf.json`
+   - `src-tauri/src/lib.rs`
+   - `docs/windows-process-identity.md`
+- Changed files:
+   - `src-tauri/tauri.conf.json`
+   - `src-tauri/src/lib.rs`
+   - `docs/windows-process-identity.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `cargo check`: pass (existing `GrowingReader` dead-code warning)
+   - `npx tauri info`: pass
+   - `npm run build`: fail (pre-existing TypeScript errors in `src/App.vue` and `src/services/playlist-loader.ts`)
+   - `npx tauri build --debug --no-bundle`: not completed because `npm run build` failed in `beforeBuildCommand`
+   - `cargo fmt --all -- --check`: fail (pre-existing formatting drift in `src-tauri/src/lib.rs`, including unrelated playlist changes)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Windows Task Manager/process-tree smoke not-run; packaged/live Tauri runtime was not available after the unrelated frontend build failure.
+- Result: Added explicit main window label, VibeDeck bundle descriptions, VibeDeck-prefixed titles for login/library/stream WebViews, and documented supported identity boundaries. Cargo package/binary naming and player/library behavior were left unchanged.
+- Blockers: WebView2 child process naming/tree is controlled partly by Windows runtime; frontend TypeScript errors outside this task block packaged runtime validation.
+
+## Agent: interface-player-rehydration [Workload: IF-20250925-RECONNECT-01]
+
+- Workload ID: `IF-20250925-RECONNECT-01`
+- Task: Reidratar player após refresh do frontend
+- Status: completed
+- Started: 2026-09-25
+- Finished: -
+- Depends on: player-queue-isolation, local-library-native-playback
+- Planned files:
+  - `src/App.vue`
+  - `src/services/`
+  - `src-tauri/src/`
+  - testes de bridge/player
+- Reserved files:
+   - `src/App.vue`
+   - `src/services/google-sync.ts`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/audio/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/interface-flows.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/App.vue`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src/services/local-library.ts`
+   - `src/services/local-library.test.ts`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/audio/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/interface-flows.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (9 files, 53 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `cargo fmt --all -- --check`: pass
+   - `cargo check`: pass (existing `GrowingReader` dead-code warning)
+   - `cargo test`: pass (4 tests)
+   - `git diff --check`: pass (LF/CRLF normalization warnings only)
+- Runtime validation: Tauri refresh/reconnect smoke not-run; packaged desktop runtime and audio device were unavailable
+- Result: Added a revisioned native `PlayerSnapshot`, typed activation context, `player-state` events, idempotent frontend hydration, single listener/in-flight hydration/reconnect retry guards, stale snapshot rejection, and bridge tests for initial/repeated/reconnect/stale/replacement/no-player states. Hydration never starts playback and localStorage is no longer treated as native playback truth.
+- Blockers: none
+
+## Agent: visualizers-bars-polish [Workload: VIS-20250925-BARS-01]
+
+- Workload ID: `VIS-20250925-BARS-01`
+- Task: Suavizar Barras e corrigir pico de gradiente
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: none
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes/documentação de visualizers se necessário
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (9 files, 56 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Browser desktop/mobile smoke passed; Canvas dimensions valid. Native analyzer/FPS measurement remains pending.
+- Result: Added time-based Bars smoothing and a bounded red peak overlay limited to the upper 18%; the body retains the standard gradient. Mascot, Serpents, and Spectrogram behavior were preserved.
+- Blockers: none
+
+## Agent: player-rust-queue-local-rehydration [Workload: IF-20250925-QUEUE-02]
+
+- Workload ID: `IF-20250925-QUEUE-02`
+- Task: Persistir fila/playlists no Rust e corrigir playback local
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: interface-player-rehydration, local-library-native-playback
+- Planned files:
+  - `src-tauri/src/audio/`
+  - `src-tauri/src/lib.rs`
+  - `src/services/player-sync.ts`
+  - `src/services/local-library.ts`
+  - `src/App.vue`
+  - testes de bridge/player/local playback
+- Reserved files:
+    - `src-tauri/src/audio/engine.rs`
+    - `src-tauri/src/local_library/mod.rs`
+    - `src-tauri/src/lib.rs`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src/services/google-sync.ts`
+   - `src/App.vue`
+   - `docs/interface-flows.md`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/local_library/mod.rs`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src/App.vue`
+   - `docs/interface-flows.md`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (9 files, 56 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `cargo fmt --all -- --check`: pass
+   - `cargo check`: pass (existing `GrowingReader` dead-code warning)
+   - `cargo test`: pass (5 tests)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri refresh/reconnect and persisted local playback smoke not-run; packaged desktop runtime, native audio device, catalog fixture, and authenticated YouTube session were unavailable.
+- Result: Rust now owns and snapshots the complete active queue/context; frontend hydration reconciles idempotently from that queue without replaying or replacing native state with empty frontend defaults. Persisted local playback keeps catalog id/managed-relative-path references, validates the canonical path below `appLocalDataDir/library`, and reports typed missing/unsafe/container errors. Browser object URLs are not persisted.
+- Blockers: none
+
+## Agent: visualizers-bars-peak-smoothing [Workload: VIS-20250925-BARS-02]
+
+- Workload ID: `VIS-20250925-BARS-02`
+- Task: Suavizar gradiente de pico das Barras
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: visualizers-bars-polish
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes de performance/visualizer
+- Reserved files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/visualizers/VisualizerCanvas.vue`
+   - `src/visualizers/visualizer-performance.ts`
+   - `src/visualizers/visualizer-performance.test.ts`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (9 files, 57 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on 1440x900 and 390x844; Visualizer settings opened and all preview canvases had non-zero CSS/pixel dimensions. Existing favicon 404 and mobile horizontal overflow remain. Native analyzer/FPS measurement not available.
+- Result: Replaced the hard full-canvas red peak overlay with six overlapping peak-relative fade segments. Fade strength is continuous from threshold to peak intensity and reaches transparent at the bounded lower edge, without per-frame gradient allocation. Preserved Bars attack/release, pause/no-data behavior, controls, and all non-Bars visualizer semantics.
+- Blockers: none
+
+## Agent: player-seek-resync [Workload: IF-20250925-SEEK-01]
+
+- Workload ID: `IF-20250925-SEEK-01`
+- Task: Re-sincronizar seek com Rust
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: interface-player-rehydration
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src-tauri/src/audio/`
+  - testes de bridge/player
+- Reserved files:
+   - `src/App.vue`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src/services/google-sync.ts`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/audio/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Changed files:
+   - `src/App.vue`
+   - `src/services/player-sync.ts`
+   - `src/services/player-sync.test.ts`
+   - `src/services/google-sync.ts`
+   - `src/services/google-sync.test.ts`
+   - `src-tauri/src/audio/engine.rs`
+   - `src-tauri/src/audio/mod.rs`
+   - `src-tauri/src/lib.rs`
+   - `docs/agent-worklog.md`
+- Tests:
+   - `npm test -- --run`: pass (9 files, 67 tests)
+   - `npm run build`: pass (existing large Three.js chunk warning)
+   - `cargo fmt --all -- --check`: pass
+   - `cargo check`: pass (existing GrowingReader warning)
+   - `cargo test`: pass (5 tests)
+   - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Tauri seek/resync smoke not-run; packaged runtime, native audio device, and live track fixture were unavailable
+- Result: Added a revisioned seek intent, native track/revision validation, authoritative snapshot response, safe coalescing of rapid seeks, stale-response rejection, analyzer reset, and frontend optimistic reconciliation for native and browser playback.
+- Blockers: none
+
+## Agent: local-playback-repair [Workload: PLAYER-20250925-LOCAL-02]
+
+- Workload ID: `PLAYER-20250925-LOCAL-02`
+- Task: Corrigir reprodução local persistida
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: player-rust-queue-local-rehydration
+- Planned files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src-tauri/src/audio/`
+  - `src-tauri/src/local_library/`
+  - testes de playback
+- Reserved files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/local-library.test.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (9 files, 69 tests)
+  - `npm run build`: pass
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass
+- Runtime validation: Tauri local playback smoke not-run; native audio device unavailable
+- Result: Fixed early-success local playback, validated decoder/device before reporting success, preserved managed path security, duration, controls, typed errors, stale replacement, and online playback.
+- Blockers: none
+
+## Agent: visualizers-idle-animation [Workload: VIS-20250925-IDLE-01]
+
+- Workload ID: `VIS-20250925-IDLE-01`
+- Task: Restaurar idle dos visualizers
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: visualizers-performance-defaults
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - testes de visualizers
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+- Changed files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `src/visualizers/mascot-audio-response.test.ts`
+  - `src/App.vue`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run src/visualizers/visualizer-performance.test.ts`: pass (7 tests)
+  - `npm test -- --run`: pass (9 files, 60 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui`; settings rendered three Canvas elements with non-zero dimensions at desktop viewport. Reduced-motion media emulation applied. Native audio playback and live idle/paused transitions were not available in browser-only runtime.
+- Result: Added explicit active/paused/idle behavior. No-track idle uses ambient-only motion for Mascot, Bars, Spectrogram scan, and Serpents3D; analyzer levels and spectrogram history remain untouched. Paused visualizers freeze, and reduced-motion disables idle scheduling.
+- Blockers: none
+
+## Agent: playlist-loading-visibility [Workload: IF-20250925-LOADING-02]
+
+- Workload ID: `IF-20250925-LOADING-02`
+- Task: Bloquear itens durante loading da playlist
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: single-page-playlist-flow, local-library-frontend-flow
+- Planned files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - `src/components/PlaylistLoadingOverlay.vue`
+  - testes de fluxo/loading
+- Reserved files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - `src/components/PlaylistLoadingOverlay.vue`
+  - `src/services/playlist-loader.ts`
+  - `src/services/playlist-loader.test.ts`
+  - `docs/interface-flows.md`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/styles.css`
+  - `src/services/playlist-loader.ts`
+  - `src/services/playlist-loader.test.ts`
+  - `docs/interface-flows.md`
+  - `docs/visual-components.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (9 files, 58 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: browser smoke passed at `http://127.0.0.1:1420/?theme=shui` on desktop and 390x844 mobile; no console errors/warnings. Native YouTube playlist pagination smoke not-run because authenticated Tauri/WebView runtime was unavailable.
+- Result: Track rows, empty state, and local drop action remain hidden while the active playlist is loading. The transparent Teleport overlay remains visible, and rows reveal only after complete/error/cancelled/stale terminal decisions. Removed broken adjacent-sibling loading selectors and preserved generation guards/partial results.
+- Blockers: none
+
+## Agent: visualizers-bars-percent-gradient [Workload: VIS-20250925-BARS-03]
+
+- Workload ID: `VIS-20250925-BARS-03`
+- Task: Aplicar gradiente percentual nas Barras
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-25
+- Depends on: visualizers-bars-peak-smoothing
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - testes de visualizer
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run src/visualizers/visualizer-performance.test.ts`: pass (7 tests)
+  - `npm test -- --run`: pass (9 files, 69 tests)
+  - `npm run build`: pass (existing large Three.js chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: Browser smoke passed at `http://127.0.0.1:5173/?theme=shui` on desktop and 390x844 mobile; visualizer settings opened and all preview canvases had non-zero CSS/pixel dimensions; clean-session console had no runtime errors. Native analyzer/FPS measurement was not available.
+- Result: Replaced the separate red peak overlay with a per-bar cached gradient. Below 50% the body remains green; from 51% to 100% the top mix uses smoothstep toward `#ff5f55`, reaching full red only at 100% while the lower body remains green. Cache keys quantize height to 1px and peak mix to 1/32, with a 512-entry bound. Preserved smoothing, pause/no-data behavior, controls, and other visualizers.
+- Blockers: none
+
+## Agent: visualizers-idle-drawer [Workload: VIS-20250925-IDLE-02]
+
+- Workload ID: `VIS-20250925-IDLE-02`
+- Task: Corrigir idle no drawer do visualizer
+- Status: cancelled
+- Started: 2026-09-25
+- Finished: -
+- Depends on: visualizers-idle-animation
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/App.vue` se necessário para estado paused/active
+  - testes de visualizer
+- Reserved files:
+  -
+- Changed files:
+  -
+- Tests: pending
+- Runtime validation: pause/no-track background and drawer smoke pending
+- Result: Superseded by `VIS-20250925-IDLE-03` after the pause-specific idle contract was clarified.
+- Blockers: none
+
+## Agent: visualizers-idle-pause [Workload: VIS-20250925-IDLE-03]
+
+- Workload ID: `VIS-20250925-IDLE-03`
+- Task: Corrigir idle ao pausar no drawer
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-27
+- Depends on: visualizers-idle-animation
+- Planned files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/App.vue` se necessário
+  - testes de visualizer
+- Reserved files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `src/App.vue`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/visualizers/VisualizerCanvas.vue`
+  - `src/visualizers/Serpents3D.vue`
+  - `src/visualizers/visualizer-performance.ts`
+  - `src/visualizers/visualizer-performance.test.ts`
+  - `src/App.vue`
+  - `docs/visualizers.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (9 files, 70 tests)
+  - `npm run build`: pass (known large Three.js chunk warning)
+  - `git diff --check`: pass (line-ending normalization warnings only)
+- Runtime validation: `http://127.0.0.1:5173/` loaded successfully; playlist background Serpents canvas had non-zero dimensions. Drawer interaction could not be exercised without a loaded player track; non-Tauri invoke and favicon 404 errors are pre-existing environment/runtime limitations.
+- Result: Paused and no-track visualizers now share ambient mode; inactive levels are forced to zero, spectrogram history is cleared and never synthesized, reduced-motion stops ambient loops, and pause clears the App analyzer snapshot. Active playback remains reactive.
+- Blockers: none
+
+## Agent: app-interface-contracts [Workload: IF-20250925-CONTRACTS-01]
+
+- Workload ID: `IF-20250925-CONTRACTS-01`
+- Task: Criar contratos tipados de comunicação
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-27
+- Depends on: interface-player-rehydration
+- Planned files:
+  - `src/interfaces/`
+  - `src/services/`
+  - `docs/interface-flows.md`
+- Reserved files:
+  - `src/interfaces/`
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/local-library.ts`
+  - `docs/interface-flows.md`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/interfaces/player.ts`
+  - `src/interfaces/library.ts`
+  - `src/interfaces/bridge.ts`
+  - `src/interfaces/visualizer.ts`
+  - `src/interfaces/index.ts`
+  - `src/interfaces/contracts.test.ts`
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src/services/google-sync.ts`
+  - `src/services/local-library.ts`
+  - `docs/interface-flows.md`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 74 tests)
+  - `npm run build`: pass
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass
+- Runtime validation: Tauri/WebView/audio not available
+- Result: Centralized typed frontend/Tauri/Rust contracts for player, visualizers, local library, snapshots, events, revisions, and structured errors. Frontend remains volatile and non-authoritative.
+- Blockers: none
+
+## Agent: local-playback-error-logging [Workload: PLAYER-20250925-LOCAL-03]
+
+- Workload ID: `PLAYER-20250925-LOCAL-03`
+- Task: Corrigir playback local e erro object
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-27
+- Depends on: local-playback-repair, app-interface-contracts
+- Planned files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/app-logs.ts`
+  - `src-tauri/src/`
+  - `src/interfaces/`
+  - testes de playback/erros/logs
+- Reserved files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src/interfaces/bridge.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/services/local-library.ts`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src/interfaces/bridge.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 77 tests)
+  - `npm run build`: pass
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass
+- Runtime validation: Tauri local playback and structured log smoke unavailable
+- Result: Normalized native local-playback failures into structured bridge errors/logs and prevented `[object Object]` from reaching UI or logs. Managed-path validation and online playback remain intact.
+- Blockers: none
+
+## Agent: player-volume-sync [Workload: IF-20250925-VOLUME-02]
+
+- Workload ID: `IF-20250925-VOLUME-02`
+- Task: Corrigir sincronização do volume
+- Status: completed
+- Started: 2026-09-25
+- Finished: 2026-09-27
+- Depends on: interface-player-rehydration
+- Planned files:
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src-tauri/src/audio/`
+  - testes de bridge/player
+- Reserved files:
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Changed files:
+  - `src/App.vue`
+  - `src/services/player-sync.ts`
+  - `src/services/player-sync.test.ts`
+  - `src-tauri/src/audio/engine.rs`
+  - `src-tauri/src/lib.rs`
+  - `docs/agent-worklog.md`
+- Tests:
+  - `npm test -- --run`: pass (10 files, 82 tests)
+  - `npm run build`: pass
+  - `cargo fmt --all -- --check`: pass
+  - `cargo check`: pass
+  - `cargo test`: pass (6 tests)
+  - `git diff --check`: pass
+- Runtime validation: native volume smoke unavailable
+- Result: Added sequenced volume intents, 16ms coalescing, stale intent rejection in Rust, authoritative snapshots, and ordered mut                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           

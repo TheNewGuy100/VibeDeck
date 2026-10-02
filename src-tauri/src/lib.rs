@@ -1,9 +1,9 @@
 #[cfg(windows)]
+use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
 use std::io::{Read, Write};
 #[cfg(windows)]
 use std::net::TcpListener;
-#[cfg(windows)]
-use std::collections::HashMap;
 #[cfg(windows)]
 use std::ptr;
 #[cfg(windows)]
@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(windows)]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use sha1::{Digest, Sha1};
 
@@ -33,6 +33,202 @@ use windows_sys::Win32::Security::Cryptography::{
 use windows_core::Interface;
 
 mod audio;
+mod local_library;
+mod playlist_catalog;
+
+#[cfg(windows)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VisualizerControlsPreference {
+    open: bool,
+    revision: u64,
+}
+
+#[cfg(windows)]
+static VISUALIZER_CONTROLS_PREFERENCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(windows)]
+fn visualizer_controls_preferences_path(
+    app: &tauri::AppHandle,
+) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("settings")
+        .join("visualizer-controls.json"))
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn get_visualizer_controls_preference(
+    app: tauri::AppHandle,
+) -> Result<VisualizerControlsPreference, String> {
+    let path = visualizer_controls_preferences_path(&app)?;
+    match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(VisualizerControlsPreference {
+                open: true,
+                revision: 0,
+            })
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn set_visualizer_controls_preference(
+    app: tauri::AppHandle,
+    open: bool,
+    revision: u64,
+) -> Result<VisualizerControlsPreference, String> {
+    let _guard = VISUALIZER_CONTROLS_PREFERENCE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let path = visualizer_controls_preferences_path(&app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Invalid settings path".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let current = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<VisualizerControlsPreference>(&bytes).ok());
+    if let Some(current) = current {
+        if revision <= current.revision {
+            return Ok(current);
+        }
+    }
+    let preference = VisualizerControlsPreference { open, revision };
+    let temp = path.with_extension(format!("{}.tmp", revision));
+    std::fs::write(
+        &temp,
+        serde_json::to_vec(&preference).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(temp, path).map_err(|error| error.to_string())?;
+    Ok(preference)
+}
+
+#[cfg(windows)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SerpentsSnakePreference {
+    id: String,
+    lane: String,
+    x: f64,
+    z: f64,
+    scale: f64,
+    phase: f64,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SerpentsLightPreference {
+    id: String,
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SerpentsPreference {
+    version: u8,
+    revision: u64,
+    snakes: Vec<SerpentsSnakePreference>,
+    lights: Vec<SerpentsLightPreference>,
+}
+
+#[cfg(windows)]
+static SERPENTS_PREFERENCE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[cfg(windows)]
+fn serpents_preferences_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("settings")
+        .join("serpents-preferences.json"))
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn get_serpents_preference(app: tauri::AppHandle) -> Result<SerpentsPreference, String> {
+    match std::fs::read(serpents_preferences_path(&app)?) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SerpentsPreference {
+            version: 1,
+            revision: 0,
+            snakes: Vec::new(),
+            lights: Vec::new(),
+        }),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn set_serpents_preference(
+    app: tauri::AppHandle,
+    preference: SerpentsPreference,
+) -> Result<SerpentsPreference, String> {
+    let _guard = SERPENTS_PREFERENCE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if preference.version != 1
+        || !(2..=8).contains(&preference.snakes.len())
+        || preference.lights.is_empty()
+        || preference.lights.len() > 8
+        || preference.snakes.iter().any(|snake| {
+            !["left", "right", "center"].contains(&snake.lane.as_str())
+                || !(-9.0..=9.0).contains(&snake.x)
+                || !(-6.0..=3.0).contains(&snake.z)
+                || !(0.5..=1.4).contains(&snake.scale)
+                || !(0.0..=6.284).contains(&snake.phase)
+        })
+        || preference.lights.iter().any(|light| {
+            !(-12.0..=12.0).contains(&light.x)
+                || !(-9.0..=9.0).contains(&light.y)
+                || !(-10.0..=14.0).contains(&light.z)
+        })
+    {
+        return Err("Serpents preference payload is outside supported bounds".to_string());
+    }
+    let path = serpents_preferences_path(&app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Invalid settings path".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let current = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SerpentsPreference>(&bytes).ok());
+    if let Some(current) = current {
+        if preference.revision <= current.revision {
+            return Ok(current);
+        }
+    }
+    let temp = path.with_extension(format!("{}.tmp", preference.revision));
+    std::fs::write(
+        &temp,
+        serde_json::to_vec(&preference).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(temp, path).map_err(|error| error.to_string())?;
+    Ok(preference)
+}
 
 #[cfg(windows)]
 #[cfg(windows)]
@@ -131,6 +327,10 @@ static YOUTUBE_PLAYLIST_DEBUG: OnceLock<Mutex<PlaylistBridgeDebugState>> = OnceL
 static YOUTUBE_PLAYLIST_CONTINUATIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 #[cfg(windows)]
+static YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS: OnceLock<Mutex<HashMap<String, HashSet<String>>>> =
+    OnceLock::new();
+
+#[cfg(windows)]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppLogEntry {
@@ -139,8 +339,23 @@ struct AppLogEntry {
     level: &'static str,
     source: &'static str,
     window: Option<&'static str>,
-    operation: &'static str,
+    operation: String,
     message: String,
+    code: Option<String>,
+    correlation_id: Option<String>,
+    details: Option<serde_json::Value>,
+}
+
+#[cfg(windows)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppLogRequest {
+    message: String,
+    operation: String,
+    correlation_id: String,
+    level: Option<String>,
+    code: Option<String>,
+    details: Option<serde_json::Value>,
 }
 
 #[cfg(windows)]
@@ -153,6 +368,25 @@ struct PlaylistBridgeDebugState {
     initial_tracks: usize,
     last_page_tracks: usize,
     total_tracks: usize,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct YouTubePlaylistPage {
+    tracks: Vec<serde_json::Value>,
+    has_more: bool,
+    continuation: Option<String>,
+}
+
+#[cfg(windows)]
+fn playlist_continuation_state(playlist_id: &str) -> Option<String> {
+    YOUTUBE_PLAYLIST_CONTINUATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|state| state.get(playlist_id).cloned())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(windows)]
@@ -174,10 +408,22 @@ fn decode_javascript_string(value: &str) -> Option<String> {
                 decoded.push(u8::from_str_radix(hex, 16).ok()?);
                 index += 3;
             }
-            b'n' => { decoded.push(b'\n'); index += 1; }
-            b'r' => { decoded.push(b'\r'); index += 1; }
-            b't' => { decoded.push(b'\t'); index += 1; }
-            other => { decoded.push(other); index += 1; }
+            b'n' => {
+                decoded.push(b'\n');
+                index += 1;
+            }
+            b'r' => {
+                decoded.push(b'\r');
+                index += 1;
+            }
+            b't' => {
+                decoded.push(b'\t');
+                index += 1;
+            }
+            other => {
+                decoded.push(other);
+                index += 1;
+            }
         }
     }
     String::from_utf8(decoded).ok()
@@ -186,27 +432,59 @@ fn decode_javascript_string(value: &str) -> Option<String> {
 #[cfg(windows)]
 fn playlist_tracks_from_payload(payload: &serde_json::Value) -> Vec<serde_json::Value> {
     fn find_string(value: &serde_json::Value, key: &str) -> Option<String> {
-        value.get(key).and_then(|value| value.as_str()).map(str::to_owned).or_else(|| {
-            value.as_array().and_then(|items| items.iter().find_map(|item| find_string(item, key)))
-                .or_else(|| value.as_object().and_then(|object| object.values().find_map(|item| find_string(item, key))))
-        })
+        value
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .or_else(|| {
+                value
+                    .as_array()
+                    .and_then(|items| items.iter().find_map(|item| find_string(item, key)))
+                    .or_else(|| {
+                        value.as_object().and_then(|object| {
+                            object.values().find_map(|item| find_string(item, key))
+                        })
+                    })
+            })
     }
     fn visit(value: &serde_json::Value, tracks: &mut Vec<serde_json::Value>) {
         if let Some(row) = value.get("musicResponsiveListItemRenderer") {
-            let video_id = row.pointer("/playlistItemData/videoId").and_then(|value| value.as_str()).map(str::to_owned)
+            let video_id = row
+                .pointer("/playlistItemData/videoId")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
                 .or_else(|| find_string(row, "videoId"));
-            let title = row.pointer("/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs/0/text").and_then(|value| value.as_str());
+            let title = row
+                .pointer(
+                    "/flexColumns/0/musicResponsiveListItemFlexColumnRenderer/text/runs/0/text",
+                )
+                .and_then(|value| value.as_str());
             if let (Some(video_id), Some(title)) = (video_id, title) {
-                if !tracks.iter().any(|track| track.get("youtubeId").and_then(|value| value.as_str()) == Some(&video_id)) {
+                if !tracks.iter().any(|track| {
+                    track.get("youtubeId").and_then(|value| value.as_str()) == Some(&video_id)
+                }) {
                     let artist = row.pointer("/flexColumns/1/musicResponsiveListItemFlexColumnRenderer/text/runs/0/text").and_then(|value| value.as_str()).unwrap_or("YouTube");
                     let duration = row.pointer("/fixedColumns/0/musicResponsiveListItemFixedColumnRenderer/text/runs/0/text").and_then(|value| value.as_str()).unwrap_or("--:--");
-                    let cover = row.pointer("/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails").and_then(|value| value.as_array()).and_then(|items| items.last()).and_then(|value| value.get("url")).and_then(|value| value.as_str());
+                    let cover = row
+                        .pointer("/thumbnail/musicThumbnailRenderer/thumbnail/thumbnails")
+                        .and_then(|value| value.as_array())
+                        .and_then(|items| items.last())
+                        .and_then(|value| value.get("url"))
+                        .and_then(|value| value.as_str());
                     tracks.push(serde_json::json!({ "id": format!("youtube-{video_id}"), "youtubeId": video_id, "title": title, "artist": artist, "album": "YouTube Music", "duration": duration, "coverUrl": cover, "source": "youtube", "accent": "#ff5f55" }));
                 }
             }
         }
-        if let Some(items) = value.as_array() { for item in items { visit(item, tracks); } }
-        if let Some(object) = value.as_object() { for item in object.values() { visit(item, tracks); } }
+        if let Some(items) = value.as_array() {
+            for item in items {
+                visit(item, tracks);
+            }
+        }
+        if let Some(object) = value.as_object() {
+            for item in object.values() {
+                visit(item, tracks);
+            }
+        }
     }
     let mut tracks = Vec::new();
     visit(payload, &mut tracks);
@@ -215,11 +493,20 @@ fn playlist_tracks_from_payload(payload: &serde_json::Value) -> Vec<serde_json::
 
 #[cfg(windows)]
 fn playlist_continuation_from_payload(payload: &serde_json::Value) -> Option<String> {
-    if let Some(token) = payload.pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token").and_then(|value| value.as_str()) {
+    if let Some(token) = payload
+        .pointer("/continuationItemRenderer/continuationEndpoint/continuationCommand/token")
+        .and_then(|value| value.as_str())
+    {
         return Some(token.to_string());
     }
-    payload.as_array().and_then(|items| items.iter().find_map(playlist_continuation_from_payload))
-        .or_else(|| payload.as_object().and_then(|object| object.values().find_map(playlist_continuation_from_payload)))
+    payload
+        .as_array()
+        .and_then(|items| items.iter().find_map(playlist_continuation_from_payload))
+        .or_else(|| {
+            payload
+                .as_object()
+                .and_then(|object| object.values().find_map(playlist_continuation_from_payload))
+        })
 }
 
 #[cfg(windows)]
@@ -227,10 +514,24 @@ fn playlist_continuation_for(payload: &serde_json::Value, playlist_id: &str) -> 
     let matches = payload.get("playlistId").and_then(|value| value.as_str()) == Some(playlist_id)
         || payload.get("targetId").and_then(|value| value.as_str()) == Some(playlist_id);
     if matches {
-        if let Some(token) = playlist_continuation_from_payload(payload) { return Some(token); }
+        if let Some(token) = playlist_continuation_from_payload(payload) {
+            return Some(token);
+        }
     }
-    payload.as_array().and_then(|items| items.iter().find_map(|item| playlist_continuation_for(item, playlist_id)))
-        .or_else(|| payload.as_object().and_then(|object| object.values().find_map(|item| playlist_continuation_for(item, playlist_id))))
+    payload
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find_map(|item| playlist_continuation_for(item, playlist_id))
+        })
+        .or_else(|| {
+            payload.as_object().and_then(|object| {
+                object
+                    .values()
+                    .find_map(|item| playlist_continuation_for(item, playlist_id))
+            })
+        })
 }
 
 #[cfg(windows)]
@@ -392,8 +693,11 @@ fn write_native_log(app: &tauri::AppHandle, message: &str) {
         level,
         source,
         window,
-        operation,
+        operation: operation.to_string(),
         message: message.to_string(),
+        code: None,
+        correlation_id: None,
+        details: None,
     };
     if let Ok(mut logs) = APP_LOGS.get_or_init(|| Mutex::new(Vec::new())).lock() {
         logs.push(entry.clone());
@@ -443,8 +747,46 @@ fn clear_app_logs() {
 
 #[cfg(windows)]
 #[tauri::command]
-fn write_app_log(app: tauri::AppHandle, message: String) {
-    write_native_log(&app, &format!("UI {message}"));
+fn write_app_log(app: tauri::AppHandle, request: AppLogRequest) {
+    let message = format!("UI {}", request.message);
+    let (level, window, _operation, source) = classify_log(&message);
+    let entry = AppLogEntry {
+        id: APP_LOG_ID.fetch_add(1, Ordering::Relaxed),
+        timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or_default(),
+        level: if request.level.as_deref() == Some("error") {
+            "error"
+        } else {
+            level
+        },
+        source,
+        window,
+        operation: request.operation,
+        message,
+        code: request.code,
+        correlation_id: Some(request.correlation_id),
+        details: request.details,
+    };
+    if let Ok(mut logs) = APP_LOGS.get_or_init(|| Mutex::new(Vec::new())).lock() {
+        logs.push(entry.clone());
+        if logs.len() > 2000 {
+            let overflow = logs.len() - 2000;
+            logs.drain(0..overflow);
+        }
+    }
+    let _ = app.emit("app-log", entry.clone());
+    if let Ok(directory) = app.path().app_data_dir() {
+        let _ = std::fs::create_dir_all(&directory);
+        if let Ok(line) = serde_json::to_string(&entry) {
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(directory.join("vibedeck.log"))
+                .and_then(|mut file| writeln!(file, "{line}"));
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -579,7 +921,7 @@ async fn open_youtube_login(app: tauri::AppHandle) -> Result<(), String> {
     let url = "https://accounts.google.com/v3/signin/identifier?continue=https://www.youtube.com/signin?action_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Dpt%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F%26feature%3D__FEATURE__&hl=pt-BR&ltmpl=music&passive=true&service=youtube&uilel=3&flowName=GlifWebSignIn&flowEntry=ServiceLogin".parse().map_err(|error: url::ParseError| error.to_string())?;
     let window =
         match WebviewWindowBuilder::new(&app, "youtube-auth", WebviewUrl::App("index.html".into()))
-            .title("Entrar no YouTube Music")
+            .title("VibeDeck - Entrar no YouTube Music")
             .inner_size(1100.0, 760.0)
             .resizable(true)
             .on_page_load(|window, payload| {
@@ -684,6 +1026,35 @@ fn youtube_session_available(app: tauri::AppHandle) -> Result<bool, String> {
         .map_err(|error| error.to_string())?
         .join("youtube-session.bin");
     Ok(path.exists())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn logout_youtube_music(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("youtube-auth") {
+        tauri::async_runtime::spawn_blocking(move || window.clear_all_browsing_data())
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string())?;
+        if let Some(window) = app.get_webview_window("youtube-auth") {
+            window.close().map_err(|error| error.to_string())?;
+        }
+    }
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    for name in ["youtube-session.bin", "secure-record.bin"] {
+        let path = data_dir.join(name);
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    write_native_log(&app, "YouTube session and stored credentials cleared");
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1047,6 +1418,7 @@ async fn load_youtube_playlists(app: tauri::AppHandle) -> Result<Vec<serde_json:
         window
     } else {
         WebviewWindowBuilder::new(&app, "youtube-library-bridge", WebviewUrl::App("index.html".into()))
+        .title("VibeDeck - YouTube Music library bridge")
         .visible(false)
         .initialization_script(interceptor)
         .initialization_script(browse_response_guard)
@@ -1237,7 +1609,7 @@ async fn load_youtube_playlists(app: tauri::AppHandle) -> Result<Vec<serde_json:
 async fn load_youtube_playlist_tracks(
     app: tauri::AppHandle,
     playlist_id: String,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<YouTubePlaylistPage, String> {
     use tauri::Manager;
     let _library_lock = YOUTUBE_LIBRARY_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -1248,31 +1620,75 @@ async fn load_youtube_playlist_tracks(
         &format!("Loading YouTube Music playlist tracks: {playlist_id}"),
     );
     let list_id = playlist_id.strip_prefix("VL").unwrap_or(&playlist_id);
-    let session_path = app.path().app_data_dir().map_err(|error| error.to_string())?.join("youtube-session.bin");
-    let protected_session = std::fs::read(session_path).map_err(|_| "Faça login no YouTube Music antes de carregar a playlist.".to_string())?;
-    let cookie_header = String::from_utf8(protect_data(protected_session, true)?).map_err(|error| error.to_string())?;
+    let session_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("youtube-session.bin");
+    let protected_session = std::fs::read(session_path)
+        .map_err(|_| "Faça login no YouTube Music antes de carregar a playlist.".to_string())?;
+    let cookie_header = String::from_utf8(protect_data(protected_session, true)?)
+        .map_err(|error| error.to_string())?;
     let html = reqwest::Client::new()
         .get(format!("https://music.youtube.com/playlist?list={list_id}"))
         .header("Cookie", cookie_header)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36")
-        .send().await.map_err(|error| error.to_string())?
-        .text().await.map_err(|error| error.to_string())?;
-    let embedded = regex::Regex::new(r#"initialData\.push\(\{\s*path:\s*['"]\\?/browse['"][\s\S]*?data:\s*'((?:\\.|[^'])*)'"#).map_err(|error| error.to_string())?;
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .text()
+        .await
+        .map_err(|error| error.to_string())?;
+    let embedded = regex::Regex::new(
+        r#"initialData\.push\(\{\s*path:\s*['"]\\?/browse['"][\s\S]*?data:\s*'((?:\\.|[^'])*)'"#,
+    )
+    .map_err(|error| error.to_string())?;
     for captures in embedded.captures_iter(&html) {
-        let Some(decoded) = captures.get(1).and_then(|value| decode_javascript_string(value.as_str())) else { continue; };
-        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&decoded) else { continue; };
+        let Some(decoded) = captures
+            .get(1)
+            .and_then(|value| decode_javascript_string(value.as_str()))
+        else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&decoded) else {
+            continue;
+        };
         let tracks = playlist_tracks_from_payload(&payload);
         if !tracks.is_empty() {
-            let continuations = YOUTUBE_PLAYLIST_CONTINUATIONS.get_or_init(|| Mutex::new(HashMap::new()));
+            let has_more = playlist_continuation_for(&payload, list_id).is_some();
+            let continuations =
+                YOUTUBE_PLAYLIST_CONTINUATIONS.get_or_init(|| Mutex::new(HashMap::new()));
             if let Ok(mut continuations) = continuations.lock() {
                 if let Some(token) = playlist_continuation_for(&payload, list_id) {
                     continuations.insert(playlist_id.clone(), token);
+                    if let Ok(mut seen) = YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
+                        .get_or_init(|| Mutex::new(HashMap::new()))
+                        .lock()
+                    {
+                        let mut tokens = HashSet::new();
+                        tokens.insert(continuations[&playlist_id].clone());
+                        seen.insert(playlist_id.clone(), tokens);
+                    }
                 } else {
-                    continuations.remove(&playlist_id);
+                    // An empty marker distinguishes a terminal embedded page from bridge state.
+                    continuations.insert(playlist_id.clone(), String::new());
                 }
             }
-            write_native_log(&app, &format!("YouTube embedded playlist returned {} tracks: playlist_id={playlist_id}", tracks.len()));
-            return Ok(tracks);
+            write_native_log(
+                &app,
+                &format!(
+                    "YouTube embedded playlist returned {} tracks: playlist_id={playlist_id}",
+                    tracks.len()
+                ),
+            );
+            return Ok(YouTubePlaylistPage {
+                tracks,
+                has_more,
+                continuation: playlist_continuation_state(&playlist_id),
+            });
         }
     }
     write_native_log(&app, &format!("YouTube embedded playlist had no tracks, falling back to bridge: playlist_id={playlist_id}"));
@@ -1360,7 +1776,11 @@ async fn load_youtube_playlist_tracks(
                     debug.last_page_tracks = tracks.len();
                     debug.total_tracks = tracks.len();
                 }
-                return Ok(tracks);
+                return Ok(YouTubePlaylistPage {
+                    tracks,
+                    has_more: true,
+                    continuation: playlist_continuation_state(&playlist_id),
+                });
             }
             tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
@@ -1381,7 +1801,7 @@ async fn load_youtube_playlist_tracks(
 async fn load_youtube_playlist_more_tracks(
     app: tauri::AppHandle,
     playlist_id: String,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<YouTubePlaylistPage, String> {
     use tauri::Manager;
     let _library_lock = YOUTUBE_LIBRARY_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -1391,50 +1811,170 @@ async fn load_youtube_playlist_more_tracks(
         &app,
         &format!("Loading more YouTube Music playlist tracks: {playlist_id}"),
     );
-    let token = YOUTUBE_PLAYLIST_CONTINUATIONS
+    let memory_token = YOUTUBE_PLAYLIST_CONTINUATIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock().map_err(|error| error.to_string())?
-        .get(&playlist_id).cloned();
+        .lock()
+        .map_err(|error| error.to_string())?
+        .get(&playlist_id)
+        .cloned();
+    let token = memory_token.or_else(|| {
+        playlist_catalog::continuation_for_playlist(&app, &playlist_id)
+            .ok()
+            .flatten()
+    });
     if let Some(token) = token {
+        if token.is_empty() {
+            write_native_log(
+                &app,
+                &format!("YouTube playlist has no continuation: playlist_id={playlist_id}"),
+            );
+            return Ok(YouTubePlaylistPage {
+                tracks: Vec::new(),
+                has_more: false,
+                continuation: None,
+            });
+        }
+        YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|error| error.to_string())?
+            .entry(playlist_id.clone())
+            .or_default()
+            .insert(token.clone());
+        YOUTUBE_PLAYLIST_CONTINUATIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|error| error.to_string())?
+            .insert(playlist_id.clone(), token.clone());
         let list_id = playlist_id.strip_prefix("VL").unwrap_or(&playlist_id);
-        let session_path = app.path().app_data_dir().map_err(|error| error.to_string())?.join("youtube-session.bin");
-        let protected_session = std::fs::read(session_path).map_err(|_| "Faça login no YouTube Music antes de carregar a playlist.".to_string())?;
-        let cookie_header = String::from_utf8(protect_data(protected_session, true)?).map_err(|error| error.to_string())?;
-        let sapisid = cookie_value(&cookie_header, "SAPISID").ok_or_else(|| "A sessão não contém SAPISID.".to_string())?;
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|value| value.as_secs()).unwrap_or_default();
+        let session_path = app
+            .path()
+            .app_data_dir()
+            .map_err(|error| error.to_string())?
+            .join("youtube-session.bin");
+        let protected_session = std::fs::read(session_path)
+            .map_err(|_| "Faça login no YouTube Music antes de carregar a playlist.".to_string())?;
+        let cookie_header = String::from_utf8(protect_data(protected_session, true)?)
+            .map_err(|error| error.to_string())?;
+        let sapisid = cookie_value(&cookie_header, "SAPISID")
+            .ok_or_else(|| "A sessão não contém SAPISID.".to_string())?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|value| value.as_secs())
+            .unwrap_or_default();
         let authorization = build_sapisid_authorization(&cookie_header, timestamp, &sapisid)?;
         let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36";
-        let config_html = reqwest::Client::new().get("https://music.youtube.com").header("Cookie", &cookie_header).header("User-Agent", user_agent).send().await.map_err(|error| error.to_string())?.text().await.map_err(|error| error.to_string())?;
-        let read_config = |name: &str| regex::Regex::new(&format!(r#"{name}":"([^\"]+)""#)).ok().and_then(|pattern| pattern.captures(&config_html)).and_then(|captures| captures.get(1)).map(|value| value.as_str().to_string()).unwrap_or_default();
+        let config_html = reqwest::Client::new()
+            .get("https://music.youtube.com")
+            .header("Cookie", &cookie_header)
+            .header("User-Agent", user_agent)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?
+            .text()
+            .await
+            .map_err(|error| error.to_string())?;
+        let read_config = |name: &str| {
+            regex::Regex::new(&format!(r#"{name}":"([^\"]+)""#))
+                .ok()
+                .and_then(|pattern| pattern.captures(&config_html))
+                .and_then(|captures| captures.get(1))
+                .map(|value| value.as_str().to_string())
+                .unwrap_or_default()
+        };
         let api_key = read_config("INNERTUBE_API_KEY");
         let mut client_version = read_config("INNERTUBE_CLIENT_VERSION");
-        if client_version.is_empty() { client_version = "1.20260920.16.00".to_string(); }
+        if client_version.is_empty() {
+            client_version = "1.20260920.16.00".to_string();
+        }
         let visitor_id = read_config("VISITOR_DATA");
         write_native_log(&app, &format!("YouTube continuation config: client_version={client_version}, visitor={}, api_key={}", !visitor_id.is_empty(), !api_key.is_empty()));
         let body = serde_json::json!({ "context": { "client": { "clientName": "WEB_REMIX", "clientVersion": client_version, "hl": "pt", "gl": "BR", "visitorData": visitor_id, "platform": "DESKTOP", "clientFormFactor": "UNKNOWN_FORM_FACTOR" }, "user": { "lockedSafetyMode": false }, "request": { "useSsl": true } }, "continuation": token });
-        let mut endpoint = url::Url::parse("https://music.youtube.com/youtubei/v1/browse").map_err(|error| error.to_string())?;
+        let mut endpoint = url::Url::parse("https://music.youtube.com/youtubei/v1/browse")
+            .map_err(|error| error.to_string())?;
         {
             let mut query = endpoint.query_pairs_mut();
-            query.append_pair("ctoken", &token).append_pair("continuation", &token).append_pair("type", "next").append_pair("prettyPrint", "false");
-            if !api_key.is_empty() { query.append_pair("key", &api_key); }
+            query
+                .append_pair("ctoken", &token)
+                .append_pair("continuation", &token)
+                .append_pair("type", "next")
+                .append_pair("prettyPrint", "false");
+            if !api_key.is_empty() {
+                query.append_pair("key", &api_key);
+            }
         }
         let response = reqwest::Client::new()
             .post(endpoint)
-            .header("Authorization", authorization).header("Cookie", cookie_header)
-            .header("X-Youtube-Client-Name", "67").header("X-Youtube-Client-Version", &client_version)
-            .header("X-Goog-Visitor-Id", visitor_id).header("X-Origin", "https://music.youtube.com")
-            .header("X-Goog-AuthUser", "0").header("X-Youtube-Bootstrap-Logged-In", "true")
+            .header("Authorization", authorization)
+            .header("Cookie", cookie_header)
+            .header("X-Youtube-Client-Name", "67")
+            .header("X-Youtube-Client-Version", &client_version)
+            .header("X-Goog-Visitor-Id", visitor_id)
+            .header("X-Origin", "https://music.youtube.com")
+            .header("X-Goog-AuthUser", "0")
+            .header("X-Youtube-Bootstrap-Logged-In", "true")
             .header("X-Goog-Request-Time", timestamp.to_string())
-            .header("Referer", format!("https://music.youtube.com/playlist?list={list_id}"))
-            .header("User-Agent", user_agent).header("Origin", "https://music.youtube.com").json(&body).send().await.map_err(|error| error.to_string())?;
+            .header(
+                "Referer",
+                format!("https://music.youtube.com/playlist?list={list_id}"),
+            )
+            .header("User-Agent", user_agent)
+            .header("Origin", "https://music.youtube.com")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
         let status = response.status();
-        let payload = response.json::<serde_json::Value>().await.map_err(|error| error.to_string())?;
-        if !status.is_success() { return Err(format!("YouTube continuation HTTP {status}: {payload}")); }
+        let payload = response
+            .json::<serde_json::Value>()
+            .await
+            .map_err(|error| error.to_string())?;
+        if !status.is_success() {
+            return Err(format!("YouTube continuation HTTP {status}: {payload}"));
+        }
         let tracks = playlist_tracks_from_payload(&payload);
-        let mut continuations = YOUTUBE_PLAYLIST_CONTINUATIONS.get_or_init(|| Mutex::new(HashMap::new())).lock().map_err(|error| error.to_string())?;
-        if let Some(next) = playlist_continuation_for(&payload, list_id) { continuations.insert(playlist_id.clone(), next); } else { continuations.remove(&playlist_id); }
-        write_native_log(&app, &format!("YouTube direct continuation returned {} tracks: playlist_id={playlist_id}", tracks.len()));
-        return Ok(tracks);
+        let mut continuations = YOUTUBE_PLAYLIST_CONTINUATIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if let Some(next) = playlist_continuation_for(&payload, list_id) {
+            let repeated = YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+                .map_err(|error| error.to_string())?
+                .entry(playlist_id.clone())
+                .or_default()
+                .contains(&next);
+            if repeated {
+                continuations.remove(&playlist_id);
+            } else {
+                continuations.insert(playlist_id.clone(), next.clone());
+                YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
+                    .get_or_init(|| Mutex::new(HashMap::new()))
+                    .lock()
+                    .map_err(|error| error.to_string())?
+                    .entry(playlist_id.clone())
+                    .or_default()
+                    .insert(next);
+            }
+        } else {
+            continuations.remove(&playlist_id);
+        }
+        write_native_log(
+            &app,
+            &format!(
+                "YouTube direct continuation returned {} tracks: playlist_id={playlist_id}",
+                tracks.len()
+            ),
+        );
+        let has_more = continuations.contains_key(&playlist_id);
+        drop(continuations);
+        let continuation = playlist_continuation_state(&playlist_id);
+        return Ok(YouTubePlaylistPage {
+            tracks,
+            has_more,
+            continuation,
+        });
     }
     let result = YOUTUBE_PLAYLIST_BRIDGE.get_or_init(|| Mutex::new(None));
     let request_id = format!(
@@ -1505,11 +2045,20 @@ async fn load_youtube_playlist_more_tracks(
                 .get_or_init(|| Mutex::new(PlaylistBridgeDebugState::default()))
                 .lock()
             {
-                debug.stage = if tracks.is_empty() { "continuation_empty" } else { "continuation_loaded" }.to_string();
+                debug.stage = if tracks.is_empty() {
+                    "continuation_empty"
+                } else {
+                    "continuation_loaded"
+                }
+                .to_string();
                 debug.last_page_tracks = tracks.len();
                 debug.total_tracks += tracks.len();
             }
-            return Ok(tracks);
+            return Ok(YouTubePlaylistPage {
+                tracks,
+                has_more: true,
+                continuation: playlist_continuation_state(&playlist_id),
+            });
         }
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
@@ -1533,6 +2082,7 @@ async fn resolve_youtube_audio_bridge(
         window
     } else {
         let window = WebviewWindowBuilder::new(&app, "youtube-stream-bridge", WebviewUrl::App("index.html".into()))
+            .title("VibeDeck - YouTube Music stream bridge")
             .visible(false)
             .initialization_script(r#"(() => { window.addEventListener('beforeunload', (event) => event.stopImmediatePropagation(), true); const silence = (media) => { if (!(media instanceof HTMLMediaElement)) return; media.muted = true; media.defaultMuted = true; media.volume = 0; }; const play = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function(...args) { silence(this); return play.apply(this, args); }; new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => { if (node instanceof HTMLMediaElement) silence(node); if (node instanceof Element) node.querySelectorAll?.('audio, video').forEach(silence); }))).observe(document, { childList: true, subtree: true }); document.querySelectorAll?.('audio, video').forEach(silence); })();"#)
             .on_page_load(|window, payload| {
@@ -1736,33 +2286,118 @@ fn build_sapisid_authorization(
 }
 
 #[cfg(windows)]
-#[tauri::command]
-fn play_audio_url(url: String) -> Result<(), String> {
-    audio::AudioEngine::play_url(url)
+fn emit_player_event(app: &tauri::AppHandle, kind: &str) {
+    let _ = app.emit(
+        "player-state",
+        serde_json::json!({ "kind": kind, "snapshot": audio::AudioEngine::snapshot() }),
+    );
 }
 
 #[cfg(windows)]
 #[tauri::command]
-fn stop_audio() {
+fn play_audio_url(
+    app: tauri::AppHandle,
+    url: String,
+    activation: audio::PlayerActivation,
+) -> Result<(), String> {
+    eprintln!("VibeDeck player activation start: command=play_audio_url intent={} generation={} index={} track={} revision={}", activation.activation_sequence, activation.queue_generation, activation.queue_index, activation.track.id, audio::AudioEngine::snapshot().revision);
+    audio::AudioEngine::play_url(url, activation)?;
+    emit_player_event(&app, "trackReplaced");
+    let snapshot = audio::AudioEngine::snapshot();
+    eprintln!("VibeDeck player activation complete: command=play_audio_url intent={} generation={} index={} track={} revision={}", snapshot.activation_sequence, snapshot.queue_generation, snapshot.queue_index, snapshot.track.as_ref().map(|track| track.id.as_str()).unwrap_or("none"), snapshot.revision);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn play_local_audio(
+    app: tauri::AppHandle,
+    request: local_library::ResolveLocalTrackRequest,
+    activation: audio::PlayerActivation,
+) -> Result<audio::PlayerSnapshot, local_library::LocalPlaybackBridgeError> {
+    let correlation_id = request.correlation_id.clone();
+    eprintln!("VibeDeck player activation start: command=play_local_audio intent={} generation={} index={} track={} correlation={}", activation.activation_sequence, activation.queue_generation, activation.queue_index, activation.track.id, correlation_id);
+    let path = local_library::resolve_local_track(&app, request).map_err(|error| {
+        local_library::LocalPlaybackBridgeError::from_error(error, correlation_id.clone())
+    })?;
+    audio::AudioEngine::validate_file(&path)
+        .map_err(|error| match error {
+            audio::FileValidationError::Io(detail) => local_library::LocalPlaybackError::Io(detail),
+            audio::FileValidationError::UnsupportedContainer => {
+                local_library::LocalPlaybackError::UnsupportedContainer
+            }
+            audio::FileValidationError::InvalidContainer(detail) => {
+                local_library::LocalPlaybackError::InvalidContainer(detail)
+            }
+            audio::FileValidationError::DecoderFailure(detail) => {
+                local_library::LocalPlaybackError::DecoderFailure(detail)
+            }
+        })
+        .map_err(|error| {
+            local_library::LocalPlaybackBridgeError::from_error(error, correlation_id.clone())
+        })?;
+    audio::AudioEngine::validate_output_device().map_err(|error| {
+        local_library::LocalPlaybackBridgeError::from_error(
+            local_library::LocalPlaybackError::NoOutputDevice(error),
+            correlation_id.clone(),
+        )
+    })?;
+    audio::AudioEngine::play_file(path, activation).map_err(|error| {
+        let playback_error = error
+            .strip_prefix("outputStart: ")
+            .map(|detail| local_library::LocalPlaybackError::NoOutputDevice(detail.to_string()))
+            .unwrap_or(local_library::LocalPlaybackError::Io(error));
+        local_library::LocalPlaybackBridgeError::from_error(playback_error, correlation_id.clone())
+    })?;
+    emit_player_event(&app, "trackReplaced");
+    let snapshot = audio::AudioEngine::snapshot();
+    eprintln!("VibeDeck player activation complete: command=play_local_audio intent={} generation={} index={} track={} revision={} correlation={}", snapshot.activation_sequence, snapshot.queue_generation, snapshot.queue_index, snapshot.track.as_ref().map(|track| track.id.as_str()).unwrap_or("none"), snapshot.revision, correlation_id);
+    Ok(snapshot)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn stop_audio(app: tauri::AppHandle) {
     audio::AudioEngine::stop();
+    emit_player_event(&app, "stateChanged");
 }
 
 #[cfg(windows)]
 #[tauri::command]
-fn set_audio_paused(paused: bool) {
+fn set_audio_paused(app: tauri::AppHandle, paused: bool) {
     audio::AudioEngine::set_paused(paused);
+    emit_player_event(&app, "stateChanged");
 }
 
 #[cfg(windows)]
 #[tauri::command]
-fn set_audio_volume(volume: f32) {
-    audio::AudioEngine::set_volume(volume);
+fn set_audio_repeat_mode(
+    app: tauri::AppHandle,
+    request: audio::RepeatModeRequest,
+) -> Result<audio::PlayerSnapshot, String> {
+    audio::AudioEngine::set_repeat_mode(request)?;
+    emit_player_event(&app, "stateChanged");
+    Ok(audio::AudioEngine::snapshot())
 }
 
 #[cfg(windows)]
 #[tauri::command]
-fn seek_audio(seconds: f64) -> Result<(), String> {
-    audio::AudioEngine::seek(seconds)
+fn set_audio_volume(app: tauri::AppHandle, request: audio::VolumeRequest) -> audio::PlayerSnapshot {
+    audio::AudioEngine::set_volume(request);
+    emit_player_event(&app, "stateChanged");
+    audio::AudioEngine::snapshot()
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn seek_audio(
+    app: tauri::AppHandle,
+    request: audio::SeekRequest,
+) -> Result<audio::PlayerSnapshot, String> {
+    audio::AudioEngine::seek(request)?;
+    let snapshot = audio::AudioEngine::snapshot();
+    emit_player_event(&app, "stateChanged");
+    Ok(snapshot)
 }
 
 #[cfg(windows)]
@@ -1795,9 +2430,16 @@ fn is_audio_paused() -> bool {
     audio::AudioEngine::is_paused()
 }
 
+#[cfg(windows)]
+#[tauri::command]
+fn get_player_snapshot() -> audio::PlayerSnapshot {
+    audio::AudioEngine::snapshot()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { .. } = event {
@@ -1807,6 +2449,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_visualizer_controls_preference,
+            set_visualizer_controls_preference,
+            get_serpents_preference,
+            set_serpents_preference,
             protect_secret,
             unprotect_secret,
             start_oauth_listener,
@@ -1817,6 +2463,7 @@ pub fn run() {
             open_youtube_login,
             capture_youtube_session,
             youtube_session_available,
+            logout_youtube_music,
             exchange_google_code,
             refresh_google_token,
             resolve_youtube_audio,
@@ -1833,15 +2480,24 @@ pub fn run() {
             set_app_webview_visible,
             export_app_logs,
             play_audio_url,
+            play_local_audio,
             stop_audio,
             set_audio_paused,
+            set_audio_repeat_mode,
             set_audio_volume,
             seek_audio,
             get_audio_position,
             get_audio_duration,
             get_audio_levels,
             is_audio_active,
-            is_audio_paused
+            is_audio_paused,
+            get_player_snapshot,
+            local_library::load_local_library,
+            local_library::import_local_paths,
+            local_library::cancel_local_import,
+            local_library::remove_local_track,
+            playlist_catalog::load_playlist_catalog,
+            playlist_catalog::save_youtube_playlist_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running VibeDeck");

@@ -9,11 +9,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview",
-    "tauri": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri"
+    "tauri": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri",
+    "tauri:debug": "node scripts/tauri-debug.mjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.47.0",
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
     "three": "^0.186.0",
     "vue": "^3.5.21"
   },

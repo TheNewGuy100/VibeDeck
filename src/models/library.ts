@@ -14,6 +14,8 @@ export interface LibraryItem {
   fileName?: string;
   durationSeconds?: number;
   youtubeId?: string;
+  managedPath?: string;
+  available?: boolean;
 }
 
 export interface Playlist {
@@ -23,4 +25,6 @@ export interface Playlist {
   tracks: LibraryItem[];
   mode: PlaylistMode;
   allowLocal?: boolean;
+  continuation?: string | null;
+  terminal?: boolean;
 }

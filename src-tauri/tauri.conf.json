@@ -11,6 +11,7 @@
   },
   "app": {
     "windows": [{
+      "label": "main",
       "title": "VibeDeck",
       "width": 1280,
       "height": 820,
@@ -24,6 +25,8 @@
     "active": true,
     "targets": "all",
     "category": "Music",
+    "shortDescription": "VibeDeck desktop music client",
+    "longDescription": "VibeDeck is a lightweight desktop music client for local and YouTube Music libraries.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -1,11 +1,30 @@
 import type { LibraryItem, Playlist } from '../models/library';
+import type { PlaylistCatalogSnapshot, SavePlaylistPageRequest } from '../interfaces/library';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { decryptSecureRecord, encryptSecureRecord } from './secure-storage';
+import type { PaginationPage } from './playlist-loader';
+import type { NativeSeekRequest, NativePlayerActivation, PlayerSnapshot, PlayerStateEvent, RepeatModeRequest, VolumeIntent } from '../interfaces/player';
+import { bridgeErrorMessage } from '../interfaces/bridge';
+import { isPlayerStateEvent, parsePlayerSnapshot } from '../interfaces/player';
+import { parseAnalyzerSnapshot } from '../interfaces/visualizer';
 
 export interface GoogleSyncResult {
   playlists: Playlist[];
   tracks: LibraryItem[];
 }
+
+export type YouTubePlaylistPage = PaginationPage<LibraryItem>;
+
+export interface YouTubeAudioStream {
+  url: string;
+  mimeType: string;
+  bitrate?: number;
+  expiresInSeconds?: number | string;
+  durationSeconds?: number | string;
+}
+
+export type { NativePlayerActivation, NativeSeekRequest, PlayerSnapshot, PlayerStateEvent } from '../interfaces/player';
 
 interface GoogleTokens {
   access_token: string;
@@ -72,9 +91,12 @@ export class GoogleSyncService {
     return this.fetchLibrary(this.accessToken as string);
   }
 
-  async resolveAudio(videoId: string) {
+  async resolveAudio(videoId: string, signal?: AbortSignal) {
     if (!this.youtubeSession) throw new Error('Faça login no YouTube Music antes de reproduzir uma faixa online.');
-    return invoke<{ url: string; mimeType: string; bitrate?: number; expiresInSeconds?: string; durationSeconds?: string }>('resolve_youtube_audio_bridge', { videoId });
+    this.throwIfAborted(signal);
+    const stream = await this.invokeBridge<YouTubeAudioStream>('resolve_youtube_audio_bridge', { videoId }, (payload) => this.validateAudioStream(payload));
+    this.throwIfAborted(signal);
+    return stream;
   }
 
   async connectYouTubeMusic(forceLogin = false) {
@@ -98,29 +120,46 @@ export class GoogleSyncService {
     return this.youtubeSession;
   }
 
+  async disconnectYouTubeMusic() {
+    await invoke('logout_youtube_music');
+    this.youtubeSession = false;
+    this.accessToken = undefined;
+    this.playlistsPromise = undefined;
+  }
+
   searchYouTube(query: string) {
     return invoke<LibraryItem[]>('search_youtube_music', { query });
   }
 
   loadYouTubePlaylists() {
     if (this.playlistsPromise) return this.playlistsPromise;
-    this.playlistsPromise = invoke<Playlist[]>('load_youtube_playlists').finally(() => {
+    this.playlistsPromise = this.invokeBridge<Playlist[]>('load_youtube_playlists', undefined, (payload) => this.validateArrayPayload(payload, 'playlists')).finally(() => {
       this.playlistsPromise = undefined;
     });
     return this.playlistsPromise;
   }
 
   loadYouTubePlaylistTracks(playlistId: string) {
-    return invoke<LibraryItem[]>('load_youtube_playlist_tracks', { playlistId });
+    return this.invokeBridge<YouTubePlaylistPage>('load_youtube_playlist_tracks', { playlistId }, (payload) => this.validatePlaylistPage(payload, 'playlist tracks'));
   }
 
   loadYouTubePlaylistMoreTracks(playlistId: string) {
-    return invoke<LibraryItem[]>('load_youtube_playlist_more_tracks', { playlistId });
+    return this.invokeBridge<YouTubePlaylistPage>('load_youtube_playlist_more_tracks', { playlistId }, (payload) => this.validatePlaylistPage(payload, 'playlist continuation tracks'));
   }
 
-  async playAudio(videoId: string) {
-    const stream = await this.resolveAudio(videoId);
-    await invoke('play_audio_url', { url: stream.url });
+  loadPlaylistCatalog() {
+    return invoke<PlaylistCatalogSnapshot>('load_playlist_catalog');
+  }
+
+  saveYouTubePlaylistPage(request: SavePlaylistPageRequest) {
+    return invoke<PlaylistCatalogSnapshot>('save_youtube_playlist_page', { request });
+  }
+
+  async playAudio(videoId: string, activation: NativePlayerActivation, signal?: AbortSignal) {
+    const stream = await this.resolveAudio(videoId, signal);
+    this.throwIfAborted(signal);
+    await invoke('play_audio_url', { url: stream.url, activation });
+    this.throwIfAborted(signal);
     return stream;
   }
 
@@ -132,8 +171,22 @@ export class GoogleSyncService {
     return invoke('set_audio_paused', { paused });
   }
 
-  setAudioVolume(volume: number) {
-    return invoke('set_audio_volume', { volume });
+  setRepeatMode(request: RepeatModeRequest) {
+    return invoke<PlayerSnapshot>('set_audio_repeat_mode', { request });
+  }
+
+  setAudioVolume(intent: VolumeIntent) {
+    return invoke<unknown>('set_audio_volume', { request: intent }).then(parsePlayerSnapshot);
+  }
+
+  getPlayerSnapshot() {
+    return invoke<unknown>('get_player_snapshot').then(parsePlayerSnapshot);
+  }
+
+  listenPlayerState(callback: (event: PlayerStateEvent) => void): Promise<UnlistenFn> {
+    return listen<unknown>('player-state', (event) => {
+      if (isPlayerStateEvent(event.payload)) callback(event.payload);
+    });
   }
 
   getAudioPosition() {
@@ -145,7 +198,7 @@ export class GoogleSyncService {
   }
 
   getAudioLevels() {
-    return invoke<number[]>('get_audio_levels');
+    return invoke<unknown>('get_audio_levels').then((payload) => parseAnalyzerSnapshot(payload).levels);
   }
 
   isAudioActive() {
@@ -156,8 +209,8 @@ export class GoogleSyncService {
     return invoke<boolean>('is_audio_paused');
   }
 
-  seekAudio(seconds: number) {
-    return invoke('seek_audio', { seconds });
+  seekAudio(request: NativeSeekRequest) {
+    return invoke<unknown>('seek_audio', { request }).then(parsePlayerSnapshot);
   }
 
   private async refresh(refreshToken: string) {
@@ -200,6 +253,46 @@ export class GoogleSyncService {
       playlists.push({ id: `youtube-playlist-${playlist.id}`, name: playlist.snippet.title, source: 'online', mode: 'online', tracks: playlistTracks, allowLocal: false });
     }
     return { playlists, tracks };
+  }
+
+  private async invokeBridge<T>(command: string, args: Record<string, unknown> | undefined, validate: (payload: unknown) => T): Promise<T> {
+    try {
+      const payload = args === undefined ? await invoke<unknown>(command) : await invoke<unknown>(command, args);
+      return validate(payload);
+    } catch (error) {
+      throw new Error(bridgeErrorMessage(error, command), { cause: error });
+    }
+  }
+
+  private validateArrayPayload<T>(payload: unknown, resultName: string): T[] {
+    if (!Array.isArray(payload) || payload.some((item) => !item || typeof item !== 'object')) throw new Error(`O bridge retornou ${resultName} inválidos.`);
+    return payload as T[];
+  }
+
+  private validatePlaylistPage(payload: unknown, resultName: string): YouTubePlaylistPage {
+    if (!payload || typeof payload !== 'object') throw new Error(`O bridge retornou ${resultName} inválidos.`);
+    const page = payload as { tracks?: unknown; hasMore?: unknown; continuation?: unknown };
+    return {
+      items: this.validateArrayPayload<LibraryItem>(page.tracks, resultName),
+      hasMore: typeof page.hasMore === 'boolean' ? page.hasMore : true,
+      ...(typeof page.continuation === 'string' ? { continuation: page.continuation } : {}),
+    };
+  }
+
+  private validateAudioStream(payload: unknown): YouTubeAudioStream {
+    if (!payload || typeof payload !== 'object') throw new Error('O bridge retornou um stream inválido.');
+    const stream = payload as Partial<YouTubeAudioStream>;
+    if (typeof stream.url !== 'string' || !/^https?:\/\/\S+$/i.test(stream.url)) throw new Error('O bridge retornou uma URL de stream inválida.');
+    if (typeof stream.mimeType !== 'string' || !stream.mimeType.trim()) throw new Error('O bridge retornou um tipo de mídia inválido.');
+    if (stream.bitrate !== undefined && (typeof stream.bitrate !== 'number' || !Number.isFinite(stream.bitrate))) throw new Error('O bridge retornou um bitrate inválido.');
+    for (const value of [stream.expiresInSeconds, stream.durationSeconds]) {
+      if (value !== undefined && typeof value !== 'string' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error('O bridge retornou metadados de duração inválidos.');
+    }
+    return stream as YouTubeAudioStream;
+  }
+
+  private throwIfAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw new DOMException('A operação do player foi cancelada.', 'AbortError');
   }
 }
 
