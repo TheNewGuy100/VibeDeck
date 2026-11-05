@@ -15,16 +15,27 @@ fast, keyboard-friendly interface.
 - Light and dark themes.
 - Two-layer protection for sensitive records: AES-GCM and Windows DPAPI.
 
-## Planned Playback Layer
+## Playback Status (2026-10-21)
 
-The online playback layer will be implemented as a small Rust client inspired
-by the behavior documented by `ytmusicapi`. The goal is to avoid shipping a
-Python runtime or depending on the library directly while keeping the online
-catalog and local player behind the same source interface.
+The current online path relays successive SABR/UMP responses from a muted,
+authenticated YouTube Music WebView to the Rust Symphonia/CPAL audio pipeline.
+Audible multi-response playback, automatic next-track advancement and pause
+were validated on 2026-10-20. Seek is not supported by this relay.
 
-The online implementation is unofficial and depends on internal YouTube Music
-behavior. Stream URLs may expire, and upstream changes can require maintenance.
-The YouTube Data API remains responsible for official account synchronization.
+The goal is a native Rust SABR client with its own scheduling and seek, removing
+playback brokers/WebViews. Its bootstrap and protocol helpers are experimental;
+native SABR playback has not been validated. The relay remains a fallback.
+
+These unofficial internal interfaces may change and require maintenance.
+Google OAuth/YouTube Data API synchronization is separate from the internal
+YouTube Music cookie-session integration.
+
+## Project Knowledge
+
+- [Documentation index](docs/README.md): architecture, playback, UI, decisions,
+  active investigation and validation, with maintenance rules.
+- [AGENTS.md](AGENTS.md): mandatory safety and development rules.
+- [CLAUDE.md](CLAUDE.md): entry point for Claude and GitNexus workflow.
 
 ## Technology
 
@@ -33,7 +44,7 @@ The YouTube Data API remains responsible for official account synchronization.
 - TypeScript
 - Rust
 - Vite
-- Web Audio and HTML audio playback for local files
+- Symphonia decoding and CPAL native audio output
 
 ## Development
 
@@ -54,13 +65,20 @@ npm run dev
 Run the desktop application:
 
 ```powershell
-npm run tauri dev
+npm run tauri -- dev
+```
+
+Run the desktop application with the native YouTube playback path (no WebView broker for the
+audio stream; falls back to the relay if it cannot start):
+
+```powershell
+npm run tauri -- dev --features native-range-playback
 ```
 
 Create Windows installers:
 
 ```powershell
-npm run tauri build
+npm run tauri -- build
 ```
 
 ## Google Configuration
@@ -80,13 +98,23 @@ accounts as OAuth test users.
 
 ## Attribution
 
-The planned unofficial YouTube Music protocol client is technically inspired
-by the open-source project `ytmusicapi` by sigma67:
+Protocol research includes the open-source project `ytmusicapi` by sigma67:
 
 https://github.com/sigma67/ytmusicapi
 
 `ytmusicapi` is distributed under the MIT License. If code from that project is
 reused directly, its copyright and license notice must be preserved.
+
+The `n` throttling-challenge work builds on the solver of
+[`yt-dlp/ejs`](https://github.com/yt-dlp/ejs) (`yt-dlp-ejs`, Unlicense; it bundles `meriyah`, ISC,
+and `astring`, MIT) and on the PO token research of [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+and [`LuanRT/BgUtils`](https://github.com/LuanRT/BgUtils). Thanks to their authors. Today the
+solver runs only in debug builds, from a local copy outside the repository; if its bundles or
+ported code are ever distributed, their notices must ship with the app.
+
+SABR/UMP research also references `LuanRT/googlevideo` and
+`gsuberland/UMP_Format`; pinned references and evidence limits are recorded in
+[Playback reference](docs/playback.md). No Python runtime is bundled.
 
 ## Disclaimer
 

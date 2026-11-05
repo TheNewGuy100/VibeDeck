@@ -6,3 +6,5 @@ src-tauri/target/
 browse-request-body.*
 todeflate
 yt-current-search.txt
+.gitnexus
+tools/*/target/
