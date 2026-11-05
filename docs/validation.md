@@ -1097,3 +1097,9 @@ decodificado entre o início do segmento e o alvo (`skip_seconds`) e a posição
 e o reinício busca 1 pedaço antes de voltar a tocar. Resultado confirmado de ouvido pelo usuário: seek por clique e por arrasto soam corretos e a resposta da interface melhorou. Registro do console da sessão: 18 seeks, 14 isolados e os demais
 juntados (2, 4 e 7 alvos por reinício).
 Limites: testado só em Windows, build de debug, faixas de áudio de catálogo em AAC; o preparo do player de uma revisão nova leva ~50 s em debug; a renovação por 401/403 real e outros formatos (Opus) não foram exercitados na interface.
+
+### Biblioteca e playlists nativas, WebView `youtube-library-bridge` aposentada, 2026-11-05
+
+Leitura da biblioteca (`FEmusic_liked_playlists`) e das faixas (`VL<id>` e continuações) por `browse` autenticado em Rust (`youtube_browse.rs`), com a sessão do app (cookie + SAPISIDHASH). Sonda: biblioteca 66 KB (7 itens de grade, sem continuação), playlist 1,2 MB (100 faixas e 1 continuação). No app (`tauri dev`), o usuário confirmou de olho a listagem de playlists e de faixas; o console registrou `library path=native_browse playlists=6`.
+Removido: a janela `youtube-library-bridge`, seus scripts injetados, os handlers de título e os estados estáticos associados. Sem fallback: falha de rede ou sessão vira erro claro para a interface. Testes: `cargo test --lib` 164 e `vitest` 179 passando.
+Pendente: o relay `youtube-stream-bridge` (só Windows) ainda é o fallback de reprodução; a paginação de faixas de playlists grandes (> 100) só foi exercitada pela continuação já existente.

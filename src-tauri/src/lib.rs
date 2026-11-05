@@ -46,6 +46,8 @@ mod youtube_cookie_bridge;
 #[cfg(windows)]
 mod youtube_http;
 #[cfg(windows)]
+mod youtube_browse;
+#[cfg(windows)]
 mod youtube_session;
 #[cfg(all(windows, debug_assertions))]
 mod youtube_session_debug;
@@ -305,22 +307,10 @@ fn unprotect_secret(secret: Vec<u8>) -> Result<Vec<u8>, String> {
 static OAUTH_CALLBACK: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
 #[cfg(windows)]
-static YOUTUBE_LIBRARY_BRIDGE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-
-#[cfg(windows)]
 static YOUTUBE_LIBRARY_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[cfg(windows)]
 static YOUTUBE_LOGIN_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-#[cfg(windows)]
-static YOUTUBE_PLAYLIST_BRIDGE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-
-#[cfg(windows)]
-static YOUTUBE_PLAYLIST_CHUNKS: OnceLock<Mutex<Vec<Option<String>>>> = OnceLock::new();
-
-#[cfg(windows)]
-static YOUTUBE_PLAYLIST_REQUEST: OnceLock<Mutex<String>> = OnceLock::new();
 
 #[cfg(windows)]
 static YOUTUBE_STREAM_BRIDGE: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -336,9 +326,6 @@ static APP_LOGS: OnceLock<Mutex<Vec<AppLogEntry>>> = OnceLock::new();
 
 #[cfg(windows)]
 static APP_LOG_ID: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(windows)]
-static MALFORMED_PLAYLIST_CHUNK_LOGGED: OnceLock<Mutex<bool>> = OnceLock::new();
 
 #[cfg(windows)]
 static YOUTUBE_PLAYLIST_DEBUG: OnceLock<Mutex<PlaylistBridgeDebugState>> = OnceLock::new();
@@ -569,7 +556,6 @@ fn webview_name(label: &str) -> (&'static str, bool) {
     match label {
         "main" => ("VibeDeck principal", false),
         "youtube-auth" => ("Login do YouTube Music", false),
-        "youtube-library-bridge" => ("Broker de biblioteca e playlists", true),
         "youtube-stream-bridge" => ("Broker de streams de audio", true),
         _ => ("WebView auxiliar", true),
     }
@@ -624,24 +610,11 @@ fn classify_log(
     if lower.contains("login") || lower.contains("youtube-auth") {
         return (level, Some("youtube-auth"), "auth", "youtube-auth");
     }
-    if lower.contains("library bridge") {
-        return (
-            level,
-            Some("youtube-library-bridge"),
-            "library",
-            "youtube-library-bridge",
-        );
+    if lower.contains("library") {
+        return (level, None, "library", "youtube-library");
     }
-    if lower.contains("playlist bridge")
-        || lower.contains("playlist tracks")
-        || lower.contains("playlist")
-    {
-        return (
-            level,
-            Some("youtube-library-bridge"),
-            "playlist",
-            "youtube-playlist",
-        );
+    if lower.contains("playlist") {
+        return (level, None, "playlist", "youtube-playlist");
     }
     if lower.contains("stream bridge")
         || lower.contains("googlevideo")
@@ -1879,190 +1852,28 @@ async fn youtube_music_healthcheck(app: tauri::AppHandle) -> YouTubeHealthCheckR
 #[cfg(windows)]
 #[tauri::command]
 async fn load_youtube_playlists(app: tauri::AppHandle) -> Result<Vec<serde_json::Value>, String> {
-    use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-    let session_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| "youtube_session_directory_failed")?
-        .join("youtube-session.bin");
-    let session = YouTubeSession::load(&session_path)?;
     let _library_lock = YOUTUBE_LIBRARY_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))
         .lock()
         .await;
-    write_native_log(&app, "Starting YouTube library bridge");
-    let result = YOUTUBE_LIBRARY_BRIDGE.get_or_init(|| Mutex::new(None));
-    *result.lock().map_err(|error| error.to_string())? = None;
-    let existing_bridge = app.get_webview_window("youtube-library-bridge");
-    let interceptor = r#"(() => { window.addEventListener('beforeunload', (event) => event.stopImmediatePropagation(), true); let sequence = 0; const metadata = (url, kind) => ({ requestId: ++sequence, playlistId: String(window.__vibeDeckExpectedPlaylistId || ''), kind, url: String(url), startedAt: performance.now() }); const save = (url, payload, meta) => { const value = String(url); if (value.includes('/youtubei/v1/browse')) { const currentPlaylist = String(window.__vibeDeckExpectedPlaylistId || ''); if (meta?.playlistId && currentPlaylist && meta.playlistId !== currentPlaylist) return; const serialized = JSON.stringify(payload); const isPlaylistShelf = serialized.includes('musicPlaylistShelfRenderer') || serialized.includes('musicPlaylistShelfContinuation'); const responseMeta = { ...meta, receivedAt: performance.now(), isPlaylistShelf }; window.__vibeDeckLastBrowseMetadata = responseMeta; window.__vibeDeckBrowseResponse = payload; if (isPlaylistShelf && !window.__vibeDeckInitialBrowsePayload) window.__vibeDeckInitialBrowsePayload = payload; } if (value.includes('/youtubei/v1/player')) window.__vibeDeckPlayerResponse = payload; }; const fetch = window.fetch; window.fetch = async (...args) => { const url = args[0]?.url || args[0]; const body = args[1]?.body; const kind = typeof body === 'string' && body.includes('continuation') ? 'continuation' : 'initial'; const meta = metadata(url, kind); const response = await fetch(...args); try { response.clone().json().then((payload) => save(url, payload, meta)); } catch (_) {} return response; }; const open = XMLHttpRequest.prototype.open; const send = XMLHttpRequest.prototype.send; XMLHttpRequest.prototype.open = function(method, url, ...args) { this.__vibeDeckUrl = url; this.__vibeDeckMetadata = metadata(url, 'initial'); return open.call(this, method, url, ...args); }; XMLHttpRequest.prototype.send = function(...args) { const body = args[0]; if (typeof body === 'string' && body.includes('continuation')) this.__vibeDeckMetadata.kind = 'continuation'; this.addEventListener('loadend', () => { try { save(this.__vibeDeckUrl, JSON.parse(this.responseText), this.__vibeDeckMetadata); } catch (_) {} }); return send.call(this, ...args); }; })();"#;
-    let browse_response_guard = r#"(() => { let response = null; let pending = []; let timer = null; Object.defineProperty(window, '__vibeDeckBrowseResponse', { configurable: true, get: () => response, set: (payload) => { if (payload === null) { clearTimeout(timer); response = null; pending = []; return; } if (!location.pathname.includes('/playlist')) { response = payload; return; } const serialized = JSON.stringify(payload); if (!serialized.includes('musicResponsiveListItemRenderer') || !serialized.includes('videoId')) return; pending.push(payload); clearTimeout(timer); timer = setTimeout(() => { response = pending.slice(); }, 3500); } }); })();"#;
-    let initial_api_interceptor = r#"(() => {})();"#;
-    let playlist_payload_scope = r#"(() => { const find = (value, key) => { if (!value || typeof value !== 'object') return null; if (Array.isArray(value)) return value.map((item) => find(item, key)).find(Boolean); if (typeof value[key] === 'string') return value[key]; return Object.values(value).map((item) => find(item, key)).find(Boolean); }; const scope = (payload, continuation = false) => { if (!payload || !location.pathname.includes('/playlist')) return payload; const expected = String(window.__vibeDeckExpectedPlaylistId || ''); const shelves = []; const visit = (value) => { if (!value || typeof value !== 'object') return; const shelf = value.musicPlaylistShelfRenderer || value.musicPlaylistShelfContinuation; if (shelf?.contents) shelves.push(shelf); Object.values(value).forEach(visit); }; visit(payload); const shelf = shelves.toSorted((left, right) => (right.contents?.length || 0) - (left.contents?.length || 0))[0]; if (!shelf) return payload; const filtered = shelf.contents.filter((item) => { const row = item?.musicResponsiveListItemRenderer; if (!row || !expected) return true; const playlistId = find(row, 'playlistId'); return !playlistId || playlistId === expected || playlistId === `VL${expected}`; }); const contents = filtered.length ? filtered : shelf.contents; return { musicPlaylistShelfRenderer: { ...shelf, contents } }; }; window.__vibeDeckScopePlaylistPayload = scope; let initial = null; Object.defineProperty(window, '__vibeDeckInitialBrowsePayload', { configurable: true, get: () => initial, set: (value) => { initial = scope(value); } }); const browse = Object.getOwnPropertyDescriptor(window, '__vibeDeckBrowseResponse'); if (browse?.get && browse?.set) Object.defineProperty(window, '__vibeDeckBrowseResponse', { configurable: true, get: browse.get, set: (value) => browse.set(scope(value)) }); })();"#;
-    let continuation_paginator = r#"(() => { const findTokens = (value, tokens = []) => { if (!value || typeof value !== 'object') return tokens; if (Array.isArray(value)) { value.forEach((item) => findTokens(item, tokens)); return tokens; } const continuation = value.continuationItemRenderer?.continuationEndpoint?.continuationCommand?.token || value.nextContinuationData?.continuation; if (typeof continuation === 'string') tokens.push(continuation); Object.values(value).forEach((item) => findTokens(item, tokens)); return tokens; }; window.__vibeDeckContinuationSeen = new Set(); window.__vibeDeckContinuationPending = []; window.__vibeDeckLoadNextPlaylistPage = async () => { const scope = window.__vibeDeckScopePlaylistPayload || ((value) => value); const initial = window.__vibeDeckInitialBrowsePayload; if (initial && !window.__vibeDeckContinuationPending.length) window.__vibeDeckContinuationPending.push(...findTokens(scope(initial, true))); const key = window.ytcfg?.get?.('INNERTUBE_API_KEY'); const context = window.ytcfg?.get?.('INNERTUBE_CONTEXT'); if (!key || !context) return false; while (window.__vibeDeckContinuationPending.length) { const token = window.__vibeDeckContinuationPending.shift(); if (!token || window.__vibeDeckContinuationSeen.has(token)) continue; window.__vibeDeckContinuationSeen.add(token); const response = await fetch(`/youtubei/v1/browse?key=${encodeURIComponent(key)}&prettyPrint=false`, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json', 'x-youtube-client-name': String(window.ytcfg.get('INNERTUBE_CONTEXT_CLIENT_NAME') || 67), 'x-youtube-client-version': String(window.ytcfg.get('INNERTUBE_CONTEXT_CLIENT_VERSION') || '') }, body: JSON.stringify({ context, continuation: token }) }); if (!response.ok) return false; const payload = await response.json(); const scoped = scope(payload, true); findTokens(scoped).forEach((next) => { if (!window.__vibeDeckContinuationSeen.has(next)) window.__vibeDeckContinuationPending.push(next); }); window.__vibeDeckBrowseResponse = null; window.__vibeDeckBrowseResponse = scoped; return true; } return false; }; })();"#;
-    let playlist_action_scope = r#"(() => { const previous = window.__vibeDeckScopePlaylistPayload || ((value) => value); const normalize = (value) => String(value || '').replace(/^VL/, ''); const scope = (payload, continuation = false) => { const expected = normalize(window.__vibeDeckExpectedPlaylistId); let found = null; const visit = (value) => { if (!value || typeof value !== 'object' || found) return; if (Array.isArray(value)) return value.forEach(visit); const action = value.appendContinuationItemsAction; const target = normalize(action?.targetId); if (action?.continuationItems && (!expected || !target || target === expected)) found = action.continuationItems; Object.values(value).forEach(visit); }; visit(payload); return found ? { musicPlaylistShelfRenderer: { contents: found } } : previous(payload, continuation); }; window.__vibeDeckScopePlaylistPayload = scope; let initial = null; Object.defineProperty(window, '__vibeDeckInitialBrowsePayload', { configurable: true, get: () => initial, set: (value) => { initial = scope(value); } }); const browse = Object.getOwnPropertyDescriptor(window, '__vibeDeckBrowseResponse'); if (browse?.get && browse?.set) Object.defineProperty(window, '__vibeDeckBrowseResponse', { configurable: true, get: browse.get, set: (value) => browse.set(scope(value)) }); })();"#;
-    let dom_continuation_fallback = r#"(() => { const previous = window.__vibeDeckLoadNextPlaylistPage; const duration = (value) => /^\d+:\d{2}(?::\d{2})?$/.test(value); const domPayload = () => { const expected = String(window.__vibeDeckExpectedPlaylistId || '').replace(/^VL/, ''); const contents = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer')].map((row) => { const href = row.querySelector('a[href*="watch?v="]')?.getAttribute('href') || ''; const params = new URLSearchParams(href.split('?')[1] || ''); const videoId = params.get('v'); if (expected && params.get('list') !== expected) return null; const lines = row.innerText.split('\n').map((value) => value.trim()).filter(Boolean); const title = lines[0]; const artist = lines[1] || 'YouTube'; const durationText = lines.find(duration) || '--:--'; const coverUrl = row.querySelector('img')?.getAttribute('src'); if (!videoId || !title) return null; return { musicResponsiveListItemRenderer: { videoId, flexColumns: [{ musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: title }] } } }, { musicResponsiveListItemFlexColumnRenderer: { text: { runs: [{ text: artist }] } } }], fixedColumns: [{ musicResponsiveListItemFixedColumnRenderer: { text: { runs: [{ text: durationText }] } } }], thumbnail: { musicThumbnailRenderer: { thumbnail: { thumbnails: coverUrl ? [{ url: coverUrl }] : [] } } } } }; }).filter(Boolean); return contents.length ? { musicPlaylistShelfRenderer: { contents } } : null; }; window.__vibeDeckLoadNextPlaylistPage = async () => { if (await previous?.()) return true; window.scrollTo(0, document.documentElement.scrollHeight); await new Promise((resolve) => setTimeout(resolve, 1800)); const payload = domPayload(); if (!payload) return false; window.__vibeDeckBrowseResponse = null; window.__vibeDeckBrowseResponse = payload; return true; }; })();"#;
-    let media_blocker = r#"(() => { const block = (media) => { if (!(media instanceof HTMLMediaElement)) return; media.autoplay = false; media.removeAttribute('autoplay'); media.muted = true; media.defaultMuted = true; media.volume = 0; media.pause(); }; HTMLMediaElement.prototype.play = function() { block(this); return Promise.resolve(); }; new MutationObserver((records) => records.forEach((record) => record.addedNodes.forEach((node) => { if (node instanceof HTMLMediaElement) block(node); if (node instanceof Element) node.querySelectorAll?.('audio, video').forEach(block); }))).observe(document, { childList: true, subtree: true }); document.querySelectorAll?.('audio, video').forEach(block); })();"#;
-    let chunked_title_bridge = r#"(() => { const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'title'); if (!descriptor?.get || !descriptor?.set) return; const source = []; let sourceRequest = null; Object.defineProperty(document, 'title', { configurable: true, get: () => descriptor.get.call(document), set: (value) => { const current = String(value); const match = /^__VIBEDECK_PLAYLIST_CHUNK__(?:(p\d+)_)?(\d+)_(\d+)_(.*)$/.exec(current); if (!match) return descriptor.set.call(document, value); const request = match[1] || window.__vibeDeckPlaylistRequestId || 'missing'; const index = Number(match[2]); const total = Number(match[3]); if (sourceRequest !== request || source.length !== total) { sourceRequest = request; source.length = total; source.fill(null); } source[index] = decodeURIComponent(match[4]); if (!source.every((chunk) => typeof chunk === 'string')) return; const json = source.join(''); const size = 500; const count = Math.ceil(json.length / size); for (let part = 0; part < count; part += 1) setTimeout(() => descriptor.set.call(document, `__VIBEDECK_PLAYLIST_CHUNK__${request}_${part}_${count}_${encodeURIComponent(json.slice(part * size, (part + 1) * size))}`), part * 20); } }); })();"#;
-    let bridge = if let Some(window) = existing_bridge {
-        window
-    } else {
-        WebviewWindowBuilder::new(&app, "youtube-library-bridge", WebviewUrl::App("index.html".into()))
-        .title("VibeDeck - YouTube Music library bridge")
-        .visible(false)
-        .initialization_script(interceptor)
-        .initialization_script(browse_response_guard)
-        .initialization_script(initial_api_interceptor)
-        .initialization_script(playlist_payload_scope)
-        .initialization_script(continuation_paginator)
-        .initialization_script(playlist_action_scope)
-        .initialization_script(dom_continuation_fallback)
-        .initialization_script(media_blocker)
-        .initialization_script(chunked_title_bridge)
-        .on_page_load(|window, payload| {
-            write_native_log(window.app_handle(), "YouTube library bridge page event");
-            if payload.url().as_str().starts_with("https://music.youtube.com/library") {
-                write_native_log(window.app_handle(), "YouTube library bridge page loaded");
-                let script = r#"(() => { let attempts = 0; const find = (value, key) => { if (!value || typeof value !== 'object') return null; if (Array.isArray(value)) return value.map((item) => find(item, key)).find(Boolean); if (typeof value[key] === 'string') return value[key]; return Object.values(value).map((item) => find(item, key)).find(Boolean); }; const collect = () => { const payload = window.__vibeDeckBrowseResponse; if (!payload && attempts++ < 50) return setTimeout(collect, 150); const playlists = []; const visit = (value) => { if (!value || playlists.length >= 100) return; if (Array.isArray(value)) return value.forEach(visit); if (typeof value !== 'object') return; const row = value.musicTwoRowItemRenderer; if (row) { const id = find(row, 'browseId'); const name = row.title?.runs?.[0]?.text; if (id && name && id.startsWith('VL') && !playlists.some((item) => item.id === id)) playlists.push({ id, name, source: 'online', mode: 'online', tracks: [], allowLocal: false }); } Object.values(value).forEach(visit); }; visit(payload); document.title = '__VIBEDECK_LIBRARY__' + encodeURIComponent(JSON.stringify(playlists)); }; collect(); })();"#;
-                if window.eval(script).is_err() { write_native_log(window.app_handle(), "YouTube library bridge script failed"); }
-            }
-            if payload.url().as_str().contains("music.youtube.com/playlist") {
-                let diagnostics = r#"(() => { const report = (kind, value) => { const message = value?.message || String(value || 'unknown'); document.title = `__VIBEDECK_PLAYLIST_DEBUG__${encodeURIComponent(`${kind}: ${message}`)}`; }; window.addEventListener('error', (event) => report('error', event.error || event.message), { once: true }); window.addEventListener('unhandledrejection', (event) => report('rejection', event.reason), { once: true }); })();"#;
-                if window.eval(diagnostics).is_err() {
-                    write_native_log(window.app_handle(), "YouTube playlist bridge diagnostics injection failed");
-                }
-                let script = r#"(() => { let attempts = 0; const find = (value, key) => { if (!value || typeof value !== 'object') return null; if (Array.isArray(value)) return value.map((item) => find(item, key)).find(Boolean); if (typeof value[key] === 'string') return value[key]; return Object.values(value).map((item) => find(item, key)).find(Boolean); }; const duration = (value) => /^\d+:\d{2}(?::\d{2})?$/.test(value); const collect = () => { const payload = window.__vibeDeckBrowseResponse; if (!payload && attempts++ < 50) return setTimeout(collect, 150); const tracks = []; const visit = (value) => { if (!value || tracks.length >= 1000) return; if (Array.isArray(value)) return value.forEach(visit); if (typeof value !== 'object') return; const row = value.musicResponsiveListItemRenderer; if (row) { const videoId = find(row, 'videoId'); const title = row.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text; const meta = (row.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map((run) => run.text).filter((text) => text && text !== ' â€¢ ' && text !== 'MÃºsica'); const artist = meta.find((text) => !duration(text)) || 'YouTube'; const durationText = row.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text || meta.find(duration) || '--:--'; const coverUrl = row.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.at(-1)?.url; if (videoId && title && !tracks.some((item) => item.youtubeId === videoId)) tracks.push({ id: `youtube-${videoId}`, youtubeId: videoId, title, artist, album: 'YouTube Music', duration: durationText, coverUrl, source: 'youtube', accent: '#ff5f55' }); } Object.values(value).forEach(visit); }; visit(payload); const json = JSON.stringify(tracks); const size = 6000; const total = Math.max(1, Math.ceil(json.length / size)); for (let index = 0; index < total; index += 1) setTimeout(() => { document.title = `__VIBEDECK_PLAYLIST_CHUNK__${index}_${total}_${encodeURIComponent(json.slice(index * size, (index + 1) * size))}`; }, index * 20); }; collect(); })();"#;
-                 match window.eval(script) {
-                     Ok(()) => write_native_log(window.app_handle(), "YouTube playlist bridge collector injected"),
-                      Err(_) => write_native_log(window.app_handle(), "YouTube playlist bridge collector injection failed"),
-                 }
-                 let embedded_browse_bridge = r#"(() => { let attempts = 0; const decode = (value) => { try { return Function(`"use strict"; return '${value}'`)(); } catch (_) { return null; } }; const collect = () => { const source = [...document.scripts].map((script) => script.textContent || '').find((text) => text.includes('initialData.push') && text.includes('/browse')); const match = source?.match(/initialData\.push\(\{\s*path:\s*['"]\\?\/browse['"][\s\S]*?data:\s*'((?:\\.|[^'])*)'/); const decoded = match ? decode(match[1]) : null; if (!decoded) { if (attempts++ < 80) return setTimeout(collect, 150); return; } try { const payload = JSON.parse(decoded); window.__vibeDeckInitialBrowsePayload = payload; window.__vibeDeckBrowseResponse = payload; } catch (_) {} }; collect(); })();"#;
-                 if window.eval(embedded_browse_bridge).is_err() {
-                      write_native_log(window.app_handle(), "YouTube embedded browse bridge injection failed");
-                 }
-                 let dom_fallback = r#"(() => { setTimeout(() => { const expected = String(window.__vibeDeckExpectedPlaylistId || '').replace(/^VL/, ''); const duration = (value) => /^\d+:\d{2}(?::\d{2})?$/.test(value); const tracks = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer')].map((row) => { const href = row.querySelector('a[href*="watch?v="]')?.getAttribute('href') || ''; const params = new URLSearchParams(href.split('?')[1] || ''); const videoId = params.get('v'); if (expected && params.get('list') !== expected) return null; const lines = row.innerText.split('\n').map((value) => value.trim()).filter(Boolean); const durationText = lines.find(duration) || '--:--'; const title = lines[0]; const artist = lines[1] || 'YouTube'; const coverUrl = row.querySelector('img')?.getAttribute('src'); return videoId && title ? { id: `youtube-${videoId}`, youtubeId: videoId, title, artist, album: 'YouTube Music', duration: durationText, coverUrl, source: 'youtube', accent: '#ff5f55' } : null; }).filter(Boolean); if (!tracks.length) return; const json = JSON.stringify(tracks); const size = 6000; const total = Math.max(1, Math.ceil(json.length / size)); for (let index = 0; index < total; index += 1) setTimeout(() => { document.title = `__VIBEDECK_PLAYLIST_CHUNK__${index}_${total}_${encodeURIComponent(json.slice(index * size, (index + 1) * size))}`; }, index * 25); }, 4500); })();"#;
-                 if window.eval(dom_fallback).is_err() {
-                      write_native_log(window.app_handle(), "YouTube playlist DOM fallback injection failed");
-                 }
-                 let dom_retry = r#"(() => { let attempts = 0; const duration = (value) => /^\d+:\d{2}(?::\d{2})?$/.test(value); const collect = () => { const expected = String(window.__vibeDeckExpectedPlaylistId || '').replace(/^VL/, ''); const tracks = [...document.querySelectorAll('ytmusic-responsive-list-item-renderer')].map((row) => { const href = row.querySelector('a[href*="watch?v="]')?.getAttribute('href') || ''; const params = new URLSearchParams(href.split('?')[1] || ''); const videoId = params.get('v'); if (expected && params.get('list') !== expected) return null; const lines = row.innerText.split('\n').map((value) => value.trim()).filter(Boolean); const title = lines[0]; if (!videoId || !title) return null; return { id: `youtube-${videoId}`, youtubeId: videoId, title, artist: lines[1] || 'YouTube', album: 'YouTube Music', duration: lines.find(duration) || '--:--', coverUrl: row.querySelector('img')?.getAttribute('src'), source: 'youtube', accent: '#ff5f55' }; }).filter(Boolean); if (!tracks.length && attempts++ < 240) return setTimeout(collect, 150); if (!tracks.length) return; const json = JSON.stringify(tracks); const size = 6000; const total = Math.max(1, Math.ceil(json.length / size)); for (let index = 0; index < total; index += 1) setTimeout(() => { document.title = `__VIBEDECK_PLAYLIST_CHUNK__${index}_${total}_${encodeURIComponent(json.slice(index * size, (index + 1) * size))}`; }, index * 25); }; collect(); })();"#;
-                 if window.eval(dom_retry).is_err() {
-                      write_native_log(window.app_handle(), "YouTube playlist DOM retry injection failed");
-                 }
-             }
-             if payload.url().as_str().contains("music.youtube.com/watch") {
-                let script = r#"(() => { let attempts = 0; let requested = false; const isAudio = (url) => /(?:mime=audio|mime=audio%2F|type=audio|audio_only)/i.test(url) && !/mime=video/i.test(url); const collect = () => { const resource = performance.getEntriesByType('resource').map((entry) => entry.name).reverse().find((url) => url.includes('googlevideo.com/videoplayback') && isAudio(url)); if (resource) { document.title = '__VIBEDECK_STREAM__' + encodeURIComponent(resource); return; } const video = document.querySelector('video'); if (video && !requested) { requested = true; video.muted = true; video.volume = 0; video.pause(); video.preload = 'auto'; video.load(); } if (attempts++ < 80) setTimeout(collect, 150); }; collect(); })();"#;
-                let _ = window.eval(script);
-            }
-        })
-        .on_document_title_changed(|window, title| {
-            if let Some(encoded) = title.strip_prefix("__VIBEDECK_LIBRARY__") {
-                let decoded = url::form_urlencoded::parse(format!("value={encoded}").as_bytes()).next().map(|(_, value)| value.into_owned());
-                if let Some(value) = decoded {
-                if let Some(result) = YOUTUBE_LIBRARY_BRIDGE.get() {
-                    if let Ok(mut stored) = result.lock() {
-                        *stored = Some(value);
-                        write_native_log(window.app_handle(), "YouTube library bridge received DOM data");
-                    }
-                }
-                }
-            }
-            if let Some(encoded) = title.strip_prefix("__VIBEDECK_PLAYLIST__") {
-                if let Some((_, value)) = url::form_urlencoded::parse(format!("value={encoded}").as_bytes()).next() {
-                if let Some(result) = YOUTUBE_PLAYLIST_BRIDGE.get() {
-                    if let Ok(mut stored) = result.lock() { *stored = Some(value.into_owned()); }
-                }
-                }
-            }
-            if let Some(chunk) = title.strip_prefix("__VIBEDECK_PLAYLIST_CHUNK__") {
-                let active_request = YOUTUBE_PLAYLIST_REQUEST.get_or_init(|| Mutex::new(String::new()));
-                let normalized = chunk.trim_start_matches('_');
-                let parts = normalized.splitn(4, '_').collect::<Vec<_>>();
-                let (request_id, index, total, encoded) = match parts.as_slice() {
-                    [request_id, index, total, encoded] if request_id.starts_with('p') => (request_id.to_string(), *index, *total, *encoded),
-                    [_bridge_request, index, total, encoded] => (active_request.lock().map(|active| active.clone()).unwrap_or_default(), *index, *total, *encoded),
-                    [index, total, encoded] => (active_request.lock().map(|active| active.clone()).unwrap_or_default(), *index, *total, *encoded),
-                    _ => {
-                        let logged = MALFORMED_PLAYLIST_CHUNK_LOGGED.get_or_init(|| Mutex::new(false));
-                        if let Ok(mut logged) = logged.lock() {
-                            if !*logged {
-                                *logged = true;
-                                write_native_log(window.app_handle(), "YouTube playlist bridge ignored malformed chunk title");
-                            }
-                        }
-                        return;
-                    }
-                };
-                if active_request.lock().map(|active| active.as_str() != request_id.as_str()).unwrap_or(true) { return; }
-                let (Ok(index), Ok(total)) = (index.parse::<usize>(), total.parse::<usize>()) else { return; };
-                let value = url::form_urlencoded::parse(format!("value={encoded}").as_bytes()).next().map(|(_, value)| value.into_owned());
-                if let Some(value) = value {
-                    let chunks = YOUTUBE_PLAYLIST_CHUNKS.get_or_init(|| Mutex::new(Vec::new()));
-                    if let Ok(mut chunks) = chunks.lock() {
-                        if chunks.len() != total { *chunks = (0..total).map(|_| None).collect(); }
-                        if index < chunks.len() { chunks[index] = Some(value); }
-                        if chunks.iter().all(Option::is_some) {
-                            let joined = chunks.iter().filter_map(|item| item.as_deref()).collect::<String>();
-                            if serde_json::from_str::<Vec<serde_json::Value>>(&joined).is_ok() {
-                                write_native_log(window.app_handle(), &format!("YouTube playlist bridge received payload: count={total}"));
-                                if let Some(result) = YOUTUBE_PLAYLIST_BRIDGE.get() {
-                                    if let Ok(mut stored) = result.lock() { *stored = Some(joined); }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(request_id) = title.strip_prefix("__VIBEDECK_PLAYLIST_DONE__") {
-                let active_request = YOUTUBE_PLAYLIST_REQUEST.get_or_init(|| Mutex::new(String::new()));
-                if !request_id.is_empty() && active_request.lock().map(|active| active.as_str() != request_id).unwrap_or(true) { return; }
-                if let Some(result) = YOUTUBE_PLAYLIST_BRIDGE.get() {
-                    if let Ok(mut stored) = result.lock() { *stored = Some("[]".to_string()); }
-                }
-            }
-            if let Some(encoded) = title.strip_prefix("__VIBEDECK_STREAM__") {
-                if let Some((_, value)) = url::form_urlencoded::parse(format!("value={encoded}").as_bytes()).next() {
-                    if let Some(result) = YOUTUBE_STREAM_BRIDGE.get() {
-                        if let Ok(mut stored) = result.lock() { *stored = Some(value.into_owned()); }
-                    }
-                }
-            }
-        })
-        .build()
-        .map_err(|error| error.to_string())?
-    };
-    mute_webview(&bridge).map_err(|error| {
-        write_native_log(
-            &app,
-            &format!("YouTube library bridge native mute failed: {error}"),
-        );
-        error
-    })?;
-    if let Err(error) = youtube_cookie_bridge::restore(&bridge, &session).await {
-        let _ = bridge.close();
-        return Err(error);
-    }
-    write_native_log(&app, "YouTube session restored");
-    write_native_log(&app, "Navigating YouTube library bridge");
-    let url = "https://music.youtube.com/library"
-        .parse()
-        .map_err(|error: url::ParseError| error.to_string())?;
-    bridge.navigate(url).map_err(|error| error.to_string())?;
-    for _ in 0..240 {
-        if let Some(value) = result.lock().map_err(|error| error.to_string())?.take() {
-            let playlists = serde_json::from_str::<Vec<serde_json::Value>>(&value)
-                .map_err(|error| error.to_string())?;
+    match youtube_browse::load_library_playlists(&app).await {
+        Ok(playlists) if !playlists.is_empty() => {
             write_native_log(
                 &app,
-                &format!(
-                    "YouTube library bridge returned {} playlists",
-                    playlists.len()
-                ),
+                &format!("YouTube library loaded natively: {} playlists", playlists.len()),
             );
-            return Ok(playlists);
+            eprintln!("VibeDeck library path=native_browse playlists={}", playlists.len());
+            Ok(playlists)
         }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        Ok(_) => {
+            write_native_log(&app, "YouTube native library returned no playlists");
+            Ok(Vec::new())
+        }
+        Err(code) => {
+            write_native_log(&app, &format!("YouTube native library failed ({code})"));
+            Err("Nao foi possivel carregar as playlists do YouTube Music. Sincronize a sessao novamente.".to_string())
+        }
     }
-    write_native_log(&app, "YouTube library bridge timed out");
-    Err("Tempo limite ao carregar playlists do YouTube Music.".to_string())
 }
 
 #[cfg(all(windows, debug_assertions))]
@@ -2092,6 +1903,51 @@ async fn debug_youtube_playlist_probe_status(app: tauri::AppHandle) -> YouTubePl
             result: "read_failed",
         },
     }
+}
+
+/// Turns one `browse` payload of a playlist (embedded in its page or fetched by `browse`) into the
+/// page the interface shows, and records the continuation token for the next page.
+#[cfg(windows)]
+fn playlist_page_from_payload(
+    app: &tauri::AppHandle,
+    playlist_id: &str,
+    list_id: &str,
+    payload: &serde_json::Value,
+) -> Option<YouTubePlaylistPage> {
+    let tracks = playlist_tracks_from_payload(payload);
+    if tracks.is_empty() {
+        return None;
+    }
+    let has_more = playlist_continuation_for(payload, list_id).is_some();
+    let continuations = YOUTUBE_PLAYLIST_CONTINUATIONS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut continuations) = continuations.lock() {
+        if let Some(token) = playlist_continuation_for(payload, list_id) {
+            continuations.insert(playlist_id.to_string(), token);
+            if let Ok(mut seen) = YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
+                .get_or_init(|| Mutex::new(HashMap::new()))
+                .lock()
+            {
+                let mut tokens = HashSet::new();
+                tokens.insert(continuations[playlist_id].clone());
+                seen.insert(playlist_id.to_string(), tokens);
+            }
+        } else {
+            // An empty marker distinguishes a terminal page from bridge state.
+            continuations.insert(playlist_id.to_string(), String::new());
+        }
+    }
+    write_native_log(
+        app,
+        &format!(
+            "YouTube playlist page returned {} tracks: playlist_id={playlist_id}",
+            tracks.len()
+        ),
+    );
+    Some(YouTubePlaylistPage {
+        tracks,
+        has_more,
+        continuation: playlist_continuation_state(playlist_id),
+    })
 }
 
 #[cfg(windows)]
@@ -2145,144 +2001,35 @@ async fn load_youtube_playlist_tracks(
         let Ok(payload) = serde_json::from_str::<serde_json::Value>(&decoded) else {
             continue;
         };
-        let tracks = playlist_tracks_from_payload(&payload);
-        if !tracks.is_empty() {
-            let has_more = playlist_continuation_for(&payload, list_id).is_some();
-            let continuations =
-                YOUTUBE_PLAYLIST_CONTINUATIONS.get_or_init(|| Mutex::new(HashMap::new()));
-            if let Ok(mut continuations) = continuations.lock() {
-                if let Some(token) = playlist_continuation_for(&payload, list_id) {
-                    continuations.insert(playlist_id.clone(), token);
-                    if let Ok(mut seen) = YOUTUBE_PLAYLIST_SEEN_CONTINUATIONS
-                        .get_or_init(|| Mutex::new(HashMap::new()))
-                        .lock()
+        if let Some(page) = playlist_page_from_payload(&app, &playlist_id, list_id, &payload) {
+            return Ok(page);
+        }
+    }
+    match youtube_browse::BrowseSession::open(&app).await {
+        Ok(browse) => {
+            let referer = format!("https://music.youtube.com/playlist?list={list_id}");
+            match browse.browse(&format!("VL{list_id}"), &referer).await {
+                Ok(payload) => {
+                    if let Some(page) =
+                        playlist_page_from_payload(&app, &playlist_id, list_id, &payload)
                     {
-                        let mut tokens = HashSet::new();
-                        tokens.insert(continuations[&playlist_id].clone());
-                        seen.insert(playlist_id.clone(), tokens);
+                        eprintln!("VibeDeck playlist path=native_browse playlist={playlist_id}");
+                        return Ok(page);
                     }
-                } else {
-                    // An empty marker distinguishes a terminal embedded page from bridge state.
-                    continuations.insert(playlist_id.clone(), String::new());
+                    write_native_log(&app, &format!("YouTube native browse returned no tracks: playlist_id={playlist_id}"));
                 }
-            }
-            write_native_log(
-                &app,
-                &format!(
-                    "YouTube embedded playlist returned {} tracks: playlist_id={playlist_id}",
-                    tracks.len()
-                ),
-            );
-            return Ok(YouTubePlaylistPage {
-                tracks,
-                has_more,
-                continuation: playlist_continuation_state(&playlist_id),
-            });
-        }
-    }
-    write_native_log(&app, &format!("YouTube embedded playlist had no tracks, falling back to bridge: playlist_id={playlist_id}"));
-    let result = YOUTUBE_PLAYLIST_BRIDGE.get_or_init(|| Mutex::new(None));
-    let bridge = app
-        .get_webview_window("youtube-library-bridge")
-        .ok_or_else(|| {
-            write_native_log(&app, &format!("YouTube playlist bridge unavailable while loading playlist tracks: playlist_id={playlist_id}"));
-            "O broker do YouTube Music nÃ£o estÃ¡ ativo. Sincronize a sessÃ£o novamente.".to_string()
-        })?;
-    let url: url::Url = format!("https://music.youtube.com/playlist?list={list_id}")
-        .parse()
-        .map_err(|error: url::ParseError| error.to_string())?;
-    for attempt in 1..=2 {
-        let request_id = format!(
-            "p{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|value| value.as_nanos())
-                .unwrap_or_default()
-        );
-        *YOUTUBE_PLAYLIST_REQUEST
-            .get_or_init(|| Mutex::new(String::new()))
-            .lock()
-            .map_err(|error| error.to_string())? = request_id.clone();
-        if let Ok(mut debug) = YOUTUBE_PLAYLIST_DEBUG
-            .get_or_init(|| Mutex::new(PlaylistBridgeDebugState::default()))
-            .lock()
-        {
-            debug.playlist_id = Some(playlist_id.clone());
-            debug.request_id = Some(request_id.clone());
-            debug.stage = "loading_initial".to_string();
-            debug.initial_tracks = 0;
-            debug.last_page_tracks = 0;
-            debug.total_tracks = 0;
-        }
-        *result.lock().map_err(|error| error.to_string())? = None;
-        YOUTUBE_PLAYLIST_CHUNKS
-            .get_or_init(|| Mutex::new(Vec::new()))
-            .lock()
-            .map_err(|error| error.to_string())?
-            .clear();
-        if let Ok(mut logged) = MALFORMED_PLAYLIST_CHUNK_LOGGED
-            .get_or_init(|| Mutex::new(false))
-            .lock()
-        {
-            *logged = false;
-        }
-        write_native_log(
-            &app,
-            &format!("YouTube playlist bridge attempt started: playlist_id={playlist_id}, attempt={attempt}, request_id={request_id}"),
-        );
-        bridge.eval(&format!("window.__vibeDeckPlaylistRequestId = '{}'; window.__vibeDeckExpectedPlaylistId = '{}'; window.__vibeDeckBrowseResponse = null; window.__vibeDeckInitialBrowsePayload = null; window.__vibeDeckContinuationSeen = new Set(); window.__vibeDeckContinuationPending = [];", request_id, list_id)).map_err(|error| error.to_string())?;
-        write_native_log(
-            &app,
-            &format!("YouTube playlist bridge state reset: playlist_id={playlist_id}, request_id={request_id}"),
-        );
-        bridge
-            .navigate(url.clone())
-            .map_err(|error| error.to_string())?;
-        write_native_log(
-            &app,
-            &format!("YouTube playlist bridge navigating: playlist_id={playlist_id}, request_id={request_id}, url={url}"),
-        );
-        for _ in 0..240 {
-            if let Some(value) = result.lock().map_err(|error| error.to_string())?.take() {
-                let tracks =
-                    serde_json::from_str::<Vec<serde_json::Value>>(&value).map_err(|error| {
-                        write_native_log(
-                            &app,
-                            &format!("YouTube playlist bridge returned invalid JSON: {error}"),
-                        );
-                        error.to_string()
-                    })?;
-                write_native_log(
+                Err(code) => write_native_log(
                     &app,
-                    &format!("YouTube playlist bridge returned {} tracks: playlist_id={playlist_id}, request_id={request_id}", tracks.len()),
-                );
-                if let Ok(mut debug) = YOUTUBE_PLAYLIST_DEBUG
-                    .get_or_init(|| Mutex::new(PlaylistBridgeDebugState::default()))
-                    .lock()
-                {
-                    debug.stage = "initial_loaded".to_string();
-                    debug.initial_tracks = tracks.len();
-                    debug.last_page_tracks = tracks.len();
-                    debug.total_tracks = tracks.len();
-                }
-                return Ok(YouTubePlaylistPage {
-                    tracks,
-                    has_more: true,
-                    continuation: playlist_continuation_state(&playlist_id),
-                });
+                    &format!("YouTube native browse failed ({code}): playlist_id={playlist_id}"),
+                ),
             }
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         }
-        write_native_log(
+        Err(code) => write_native_log(
             &app,
-            &format!("YouTube playlist bridge attempt {attempt} timed out: playlist_id={playlist_id}, request_id={request_id}"),
-        );
+            &format!("YouTube native browse unavailable ({code}): playlist_id={playlist_id}"),
+        ),
     }
-    write_native_log(
-        &app,
-        "YouTube playlist bridge timed out while loading tracks",
-    );
-    Err("Tempo limite ao carregar as faixas da playlist.".to_string())
+    Err("Nao foi possivel carregar as faixas da playlist.".to_string())
 }
 
 #[cfg(windows)]
@@ -2462,97 +2209,13 @@ async fn load_youtube_playlist_more_tracks(
             continuation,
         });
     }
-    let result = YOUTUBE_PLAYLIST_BRIDGE.get_or_init(|| Mutex::new(None));
-    let request_id = format!(
-        "p{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or_default()
-    );
-    *YOUTUBE_PLAYLIST_REQUEST
-        .get_or_init(|| Mutex::new(String::new()))
-        .lock()
-        .map_err(|error| error.to_string())? = request_id.clone();
-    if let Ok(mut debug) = YOUTUBE_PLAYLIST_DEBUG
-        .get_or_init(|| Mutex::new(PlaylistBridgeDebugState::default()))
-        .lock()
-    {
-        debug.playlist_id = Some(playlist_id.clone());
-        debug.request_id = Some(request_id.clone());
-        debug.stage = "loading_continuation".to_string();
-    }
-    *result.lock().map_err(|error| error.to_string())? = None;
-    YOUTUBE_PLAYLIST_CHUNKS
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clear();
-    if let Ok(mut logged) = MALFORMED_PLAYLIST_CHUNK_LOGGED
-        .get_or_init(|| Mutex::new(false))
-        .lock()
-    {
-        *logged = false;
-    }
-    let bridge = app
-        .get_webview_window("youtube-library-bridge")
-        .ok_or_else(|| {
-            write_native_log(&app, &format!("YouTube playlist bridge unavailable while loading more tracks: playlist_id={playlist_id}, request_id={request_id}"));
-            "O broker do YouTube Music nÃ£o estÃ¡ ativo. Sincronize a sessÃ£o novamente.".to_string()
-        })?;
-    write_native_log(
-        &app,
-        &format!("YouTube playlist bridge more tracks request started: playlist_id={playlist_id}, request_id={request_id}"),
-    );
-    bridge
-        .eval(&format!(
-            "window.__vibeDeckPlaylistRequestId = '{}';",
-            request_id
-        ))
-        .map_err(|error| error.to_string())?;
-    write_native_log(
-        &app,
-        &format!("YouTube playlist bridge more tracks request id injected: playlist_id={playlist_id}, request_id={request_id}"),
-    );
-    let script = r#"(() => { const find = (value, key) => { if (!value || typeof value !== 'object') return null; if (Array.isArray(value)) return value.map((item) => find(item, key)).find(Boolean); if (typeof value[key] === 'string') return value[key]; return Object.values(value).map((item) => find(item, key)).find(Boolean); }; const duration = (value) => /^\d+:\d{2}(?::\d{2})?$/.test(value); const emit = (tracks) => { if (!tracks.length) { document.title = '__VIBEDECK_PLAYLIST_DONE__'; return; } const json = JSON.stringify(tracks); const size = 6000; const total = Math.max(1, Math.ceil(json.length / size)); for (let index = 0; index < total; index += 1) setTimeout(() => { document.title = `__VIBEDECK_PLAYLIST_CHUNK__${index}_${total}_${encodeURIComponent(json.slice(index * size, (index + 1) * size))}`; }, index * 25); }; const collect = async () => { const ok = await window.__vibeDeckLoadNextPlaylistPage?.(); if (!ok) return emit([]); await new Promise((resolve) => setTimeout(resolve, 3600)); const payload = window.__vibeDeckBrowseResponse; const tracks = []; const visit = (value) => { if (!value || tracks.length >= 1000) return; if (Array.isArray(value)) return value.forEach(visit); if (typeof value !== 'object') return; const row = value.musicResponsiveListItemRenderer; if (row) { const videoId = find(row, 'videoId'); const title = row.flexColumns?.[0]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.[0]?.text; const meta = (row.flexColumns?.[1]?.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map((run) => run.text).filter((text) => text && text !== ' â€¢ ' && text !== 'MÃºsica'); const artist = meta.find((text) => !duration(text)) || 'YouTube'; const durationText = row.fixedColumns?.[0]?.musicResponsiveListItemFixedColumnRenderer?.text?.runs?.[0]?.text || meta.find(duration) || '--:--'; const coverUrl = row.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails?.at(-1)?.url; if (videoId && title && !tracks.some((item) => item.youtubeId === videoId)) tracks.push({ id: `youtube-${videoId}`, youtubeId: videoId, title, artist, album: 'YouTube Music', duration: durationText, coverUrl, source: 'youtube', accent: '#ff5f55' }); } Object.values(value).forEach(visit); }; visit(payload); emit(tracks); }; collect(); })();"#;
-    bridge.eval(script).map_err(|error| error.to_string())?;
-    for _ in 0..80 {
-        if let Some(value) = result.lock().map_err(|error| error.to_string())?.take() {
-            let tracks = serde_json::from_str::<Vec<serde_json::Value>>(&value)
-                .map_err(|error| error.to_string())?;
-            write_native_log(
-                &app,
-                &format!(
-                    "YouTube playlist bridge returned {} more tracks: playlist_id={playlist_id}, request_id={request_id}",
-                    tracks.len()
-                ),
-            );
-            if let Ok(mut debug) = YOUTUBE_PLAYLIST_DEBUG
-                .get_or_init(|| Mutex::new(PlaylistBridgeDebugState::default()))
-                .lock()
-            {
-                debug.stage = if tracks.is_empty() {
-                    "continuation_empty"
-                } else {
-                    "continuation_loaded"
-                }
-                .to_string();
-                debug.last_page_tracks = tracks.len();
-                debug.total_tracks += tracks.len();
-            }
-            return Ok(YouTubePlaylistPage {
-                tracks,
-                has_more: true,
-                continuation: playlist_continuation_state(&playlist_id),
-            });
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    }
-    write_native_log(
-        &app,
-        &format!("YouTube playlist bridge timed out while loading more tracks: playlist_id={playlist_id}, request_id={request_id}"),
-    );
-    Err("Tempo limite ao carregar mais faixas da playlist.".to_string())
+    // Without a stored token there is nothing more to fetch: the first page already
+    // recorded either the next token or an empty marker.
+    Ok(YouTubePlaylistPage {
+        tracks: Vec::new(),
+        has_more: false,
+        continuation: None,
+    })
 }
 
 #[cfg(windows)]
@@ -4645,6 +4308,7 @@ fn app_invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         sabr::native_trial::debug_native_playback_trial,
         sabr::script_probe::debug_youtube_player_script_once,
         sabr::client_survey::debug_youtube_player_client_survey,
+        youtube_browse::probe::debug_youtube_browse_probe,
         #[cfg(feature = "native-playback-trial")]
         sabr::native_media_probe::debug_youtube_native_media_once,
         #[cfg(feature = "native-playback-trial")]

@@ -98,5 +98,5 @@ Os adaptadores de produção são reutilizados sem alterar playback ou login nor
 
 `src-tauri/tauri.conf.json` define produto/descrições/`com.vibedeck.desktop`;
 Cargo/binário `vibedeck`. Janela `main` com título VibeDeck; auxiliares
-`youtube-auth`, `youtube-library-bridge`, `youtube-stream-bridge` com títulos prefixados.
+`youtube-auth`, `youtube-stream-bridge` com títulos prefixados.
 Sem sidecar. WebView2 conserva o processo `msedgewebview2.exe`, controlado pelo runtime.
