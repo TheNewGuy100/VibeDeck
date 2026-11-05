@@ -10,7 +10,13 @@
     "test:watch": "vitest",
     "preview": "vite preview",
     "tauri": "set \"PATH=%USERPROFILE%\\.cargo\\bin;%PATH%\" && tauri",
-    "tauri:debug": "node scripts/tauri-debug.mjs"
+    "tauri:build": "npm run tauri -- build",
+    "tauri:build:msi": "npm run tauri -- build --bundles msi",
+    "tauri:debug": "node scripts/tauri-debug.mjs",
+    "session:debug": "node scripts/session-debug.mjs",
+    "lab:test": "node --test scripts/sabr-trace/sabr-trace.test.mjs scripts/sabr-trace/validate-n.test.mjs scripts/sabr-trace/pot-observe.test.mjs scripts/sabr-trace/session-observe.test.mjs scripts/cdp-lab/cdp-lab.test.mjs",
+    "youtube:playlist-probe:debug": "node scripts/youtube-playlist-probe-debug.mjs",
+    "youtube:healthcheck": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/youtube-healthcheck.ps1"
   },
   "dependencies": {
     "@lucide/vue": "^1.47.0",

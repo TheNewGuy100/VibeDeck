@@ -25,9 +25,17 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 webview2-com = "0.38.2"
 windows-core = "0.61.2"
 cpal = "0.15"
-symphonia = { version = "0.5", features = ["aac", "isomp4", "ogg", "vorbis", "mkv"] }
+symphonia = { version = "0.5", features = ["aac", "isomp4", "ogg", "vorbis", "mkv", "wav"] }
 rustfft = "6"
 tokio = { version = "1", features = ["time"] }
+vibedeck-bootstrap-inspect = { path = "../tools/bootstrap-inspect", optional = true }
+vibedeck-decipher-eval = { path = "../tools/decipher-eval", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_System_Com"] }
 
 [features]
+native-range-playback = ["bootstrap-inspection", "dep:vibedeck-decipher-eval"]
+native-playback-trial = ["native-range-playback"]
+bootstrap-inspection = ["dep:vibedeck-bootstrap-inspect"]
 custom-protocol = ["tauri/custom-protocol"]

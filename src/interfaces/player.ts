@@ -86,6 +86,41 @@ export interface PlayerSnapshot extends Omit<QueueContext, 'playlistId' | 'queue
   terminalBehavior: QueueTerminalBehavior;
 }
 
+export interface NativeAudioPlaybackDiagnostic {
+  activationSequence: number;
+  playerActivationSequence?: number | null;
+  stage: string;
+  outcome: string;
+  httpStatus: number | null;
+  responseBytes: number;
+  mediaBytes: number;
+  umpPartKinds: Array<{ kind: number; count: number }>;
+  umpSegments?: Array<{
+    order: number;
+    headerId: number | null;
+    itag: number | null;
+    isInitializationSegment: boolean | null;
+    segmentNum: number | null;
+    segmentByteRangeStart: number | null;
+    segmentLengthBytes: number | null;
+    mediaBytes: number;
+    emittedMediaBytes?: number;
+    skippedMediaBytes?: number;
+    firstMediaBox: string | null;
+    sawMediaEnd: boolean;
+  }>;
+  umpFormats?: Array<{
+    itag: number | null;
+    mimeType: string;
+    hasInitRange: boolean;
+  }>;
+  decoderStarted: boolean;
+  outputStarted: boolean;
+  errorCode: string | null;
+  probeErrorKind?: string | null;
+  updatedAtUnixMs: number;
+}
+
 export type PlayerEventKind = 'stateChanged' | 'trackReplaced' | 'ended' | 'error';
 
 export interface PlayerStateEvent {

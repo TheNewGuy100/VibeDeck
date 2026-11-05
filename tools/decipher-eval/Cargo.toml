@@ -1,0 +1,17 @@
+[package]
+name = "vibedeck-decipher-eval"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Do not enable rust-alloc/allocator: they disable Runtime::set_memory_limit.
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+oxc_allocator = "=0.95.0"
+oxc_ast = "=0.95.0"
+oxc_ast_visit = "=0.95.0"
+oxc_parser = "=0.95.0"
+oxc_span = "=0.95.0"
+oxc_semantic = "=0.95.0"
+html5ever = "=0.38.0"
+markup5ever_rcdom = "=0.38.0"

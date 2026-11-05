@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { decryptSecureRecord, encryptSecureRecord } from './secure-storage';
 import type { PaginationPage } from './playlist-loader';
-import type { NativeSeekRequest, NativePlayerActivation, PlayerSnapshot, PlayerStateEvent, RepeatModeRequest, VolumeIntent } from '../interfaces/player';
+import type { NativeAudioPlaybackDiagnostic, NativeSeekRequest, NativePlayerActivation, PlayerSnapshot, PlayerStateEvent, RepeatModeRequest, VolumeIntent } from '../interfaces/player';
 import { bridgeErrorMessage } from '../interfaces/bridge';
 import { isPlayerStateEvent, parsePlayerSnapshot } from '../interfaces/player';
 import { parseAnalyzerSnapshot } from '../interfaces/visualizer';
@@ -37,6 +37,7 @@ export class GoogleSyncService {
   private readonly clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
   private accessToken?: string;
   private youtubeSession = false;
+  private nativeRange = false;
   private playlistsPromise?: Promise<Playlist[]>;
 
   isConfigured() {
@@ -91,10 +92,10 @@ export class GoogleSyncService {
     return this.fetchLibrary(this.accessToken as string);
   }
 
-  async resolveAudio(videoId: string, signal?: AbortSignal) {
+  async resolveAudio(videoId: string, activationSequence: number, signal?: AbortSignal) {
     if (!this.youtubeSession) throw new Error('Faça login no YouTube Music antes de reproduzir uma faixa online.');
     this.throwIfAborted(signal);
-    const stream = await this.invokeBridge<YouTubeAudioStream>('resolve_youtube_audio_bridge', { videoId }, (payload) => this.validateAudioStream(payload));
+    const stream = await this.invokeBridge<YouTubeAudioStream>('resolve_youtube_audio_bridge', { videoId, activationSequence }, (payload) => this.validateAudioStream(payload));
     this.throwIfAborted(signal);
     return stream;
   }
@@ -155,12 +156,53 @@ export class GoogleSyncService {
     return invoke<PlaylistCatalogSnapshot>('save_youtube_playlist_page', { request });
   }
 
+  /** Turns on the native byte-range player (no WebView broker); the relay stays as the fallback. */
+  useNativeRange(enabled: boolean) {
+    this.nativeRange = enabled;
+  }
+
+  isNativeRangeAvailable() {
+    return invoke<boolean>('is_native_range_available').catch(() => false);
+  }
+
   async playAudio(videoId: string, activation: NativePlayerActivation, signal?: AbortSignal) {
-    const stream = await this.resolveAudio(videoId, signal);
     this.throwIfAborted(signal);
-    await invoke('play_audio_url', { url: stream.url, activation });
+    if (this.nativeRange) {
+      try {
+        const native = await invoke<{
+          scope: 'native_byte_range';
+          audioEngineStarted: boolean;
+          continuation: true;
+          seek: true;
+        }>('play_youtube_audio_native_range', { videoId, activation });
+        if (native.scope === 'native_byte_range' && native.audioEngineStarted) {
+          this.throwIfAborted(signal);
+          return { durationSeconds: activation.track.durationSeconds };
+        }
+      } catch {
+        // Superseded activations stay aborted; anything else falls back to the relay below.
+        this.throwIfAborted(signal);
+      }
+    }
+    try {
+      const result = await invoke<{
+        scope: 'continuous_sabr_relay';
+        audioEngineStarted: boolean;
+        continuation: true;
+        seek: false;
+      }>('play_youtube_audio_ump_stream', { videoId, activation });
+      if (result.scope !== 'continuous_sabr_relay' || !result.audioEngineStarted) {
+        throw new Error('O relay nativo não iniciou a reprodução contínua do UMP.');
+      }
+    } catch (error) {
+      throw new Error(bridgeErrorMessage(error, 'play_youtube_audio_ump_stream'), { cause: error });
+    }
     this.throwIfAborted(signal);
-    return stream;
+    return { durationSeconds: activation.track.durationSeconds };
+  }
+
+  getAudioPlaybackDiagnostic() {
+    return invoke<NativeAudioPlaybackDiagnostic>('get_audio_playback_diagnostic');
   }
 
   stopAudio() {

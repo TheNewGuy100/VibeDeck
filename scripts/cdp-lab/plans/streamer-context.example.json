@@ -1,0 +1,11 @@
+{
+  "note": "Exemplo para UMA revisao do player da Music (2026-10-22): nomes ofuscados mudam a cada revisao, entao os needles precisam ser recalibrados. Cada ponto registra so classes/presenca.",
+  "scriptUrlContains": "/s/player/",
+  "points": [
+    {
+      "label": "streamerCtxToken",
+      "needle": "Nz(a,2,b.QG);Nz(a,3,b.playbackCookie)",
+      "expression": "({token: b.QG ? L(b.QG.length === undefined ? b.QG.byteLength : b.QG.length) : 'absent'})"
+    }
+  ]
+}

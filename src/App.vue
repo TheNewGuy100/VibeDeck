@@ -15,6 +15,8 @@ import QueuePanel from './components/QueuePanel.vue';
 import PlaylistLoadingOverlay from './components/PlaylistLoadingOverlay.vue';
 import AccountMenu from './components/AccountMenu.vue';
 import MusicPickerMenu from './components/MusicPickerMenu.vue';
+import TrackArtworkViewer from './components/TrackArtworkViewer.vue';
+import PlayerSandboxFrame from './components/PlayerSandboxFrame.vue';
 import VisualizerTrackArtwork from './visualizers/VisualizerTrackArtwork.vue';
 import { DEFAULT_SERPENT_RESOLUTION } from './visualizers/visualizer-performance';
 import { isCurrentPlaylistRequest, loadAllPages, PlaylistOperationRegistry, shouldRevealPlaylistTracks, type PaginationPage } from './services/playlist-loader';
@@ -23,7 +25,9 @@ import { terminalBehaviorForRepeatMode } from './interfaces/player';
 import { reconcilePlayerSnapshot, seekSnapshotMatchesIntent, volumeSnapshotMatchesIntent } from './services/player-sync';
 import { extractNativePaths, isTauriRuntime, localLibraryService, localPlaybackErrorMessage, localPlaylistToPlaylist, requireNativePaths, selectedDialogPaths, summarizeLocalImport } from './services/local-library';
 import { normalizeBridgeError } from './interfaces/bridge';
+import { formatSandboxAudioDiagnostic, formatSandboxPlaybackFailure } from './services/player-diagnostic';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 const Serpents3D = defineAsyncComponent(() => import('./visualizers/Serpents3D.vue'));
 
 type Screen = 'home' | 'libraries' | 'playlist' | 'logs';
@@ -45,6 +49,8 @@ const favoriteTracks = ref<LibraryItem[]>([]);
 const onlinePlaylists = ref<Playlist[]>([]);
 const searchPlaylist = ref<Playlist | null>(null);
 const currentTrack = ref<LibraryItem | null>(null);
+const artworkViewerTrack = ref<LibraryItem | null>(null);
+const artworkViewerOrigin = ref<HTMLElement | null>(null);
 const queue = ref<LibraryItem[]>([]);
 const queuePlaylistId = ref<string | null>(null);
 const queueSource = ref<Playlist['source']>('local');
@@ -140,6 +146,8 @@ let nativeRepeatSync: Promise<void> = Promise.resolve();
 const nativePlayerRevision = ref(-1);
 const nativePlayerSnapshot = ref<PlayerSnapshot | null>(null);
 const nativePlayerConnection = ref<PlayerConnection>('connecting');
+const sandboxPlaybackBusy = ref(false);
+const sandboxPlaybackStatus = ref('Player pronto para receber uma solicitação manual.');
 const nativeSeekPending = ref<NativeSeekIntent | null>(null);
 const transientObjectUrls = new Set<string>();
 
@@ -769,7 +777,7 @@ async function searchLibrary() {
   }
 }
 
-async function play(item: LibraryItem, fromQueue = false, forceRestart = false, selectedTrackIndex?: number) {
+async function play(item: LibraryItem, fromQueue = false, forceRestart = false, selectedTrackIndex?: number, onPlaybackFailure?: (error: unknown) => void) {
   const visiblePlaylist = activePlaylist.value;
   if (!fromQueue && visiblePlaylist?.id.startsWith('VLPL') && visiblePlaylist.source === 'online' && !fullyLoadedPlaylists.value.has(visiblePlaylist.id)) {
     const playlistId = visiblePlaylist.id;
@@ -863,6 +871,7 @@ async function play(item: LibraryItem, fromQueue = false, forceRestart = false, 
       queueActivationPending.value = false;
       activePlaybackQueueIndex = -1;
       isPlaying.value = false;
+      onPlaybackFailure?.(error);
       logUi(`player queue activation failed: intent=${activationSequence}, request=${requestGeneration}, track=${item.id}, native=true`);
       showToast(error instanceof Error ? error.message : 'Não foi possível resolver o áudio online.');
     }
@@ -908,6 +917,70 @@ async function play(item: LibraryItem, fromQueue = false, forceRestart = false, 
     void audio.value.play();
     queueActivationPending.value = false;
   });
+}
+
+async function playSandboxVideo(videoId: string) {
+  if (sandboxPlaybackBusy.value) return;
+  sandboxPlaybackBusy.value = true;
+  sandboxPlaybackStatus.value = 'Preparando reprodução nativa...';
+  try {
+    if (!developerMode.value) throw new Error('developer_mode_required');
+    if (!googleConnected.value) throw new Error('youtube_session_required');
+    if (!isTauriRuntime()) throw new Error('tauri_runtime_required');
+    if (nativePlayerConnection.value !== 'connected') await rehydrateNativePlayer();
+    if (nativePlayerConnection.value !== 'connected') throw new Error('native_player_unavailable');
+    audio.value?.pause();
+
+    const track: LibraryItem = {
+      id: 'player-sandbox-track',
+      youtubeId: videoId,
+      title: 'Faixa de teste',
+      artist: 'YouTube Music',
+      album: 'Player sandbox',
+      duration: '--:--',
+      source: 'youtube',
+      accent: '#ff5f55',
+    };
+    queueGeneration.value += 1;
+    queueActivationPending.value = true;
+    queuePlaylistId.value = 'player-sandbox';
+    queueSource.value = 'youtube';
+    queueShuffled.value = false;
+    queue.value = [track];
+    queueIndex.value = 0;
+    const expectedPlayerActivationSequence = playbackActivationSequence + 1;
+    let activationFailure: string | null = null;
+    await play(track, true, true, undefined, (error) => {
+      activationFailure = formatSandboxPlaybackFailure(error);
+    });
+    if (currentTrack.value?.id === track.id && isPlaying.value) {
+      sandboxPlaybackStatus.value = 'Engine nativo iniciado com a primeira resposta; continuação e seek não estão incluídos.';
+    } else {
+      try {
+        const diagnostic = await googleSyncService.getAudioPlaybackDiagnostic();
+        if (diagnostic.playerActivationSequence === expectedPlayerActivationSequence
+          && (diagnostic.errorCode !== null || diagnostic.outcome === 'error')) {
+          sandboxPlaybackStatus.value = formatSandboxAudioDiagnostic(diagnostic, expectedPlayerActivationSequence);
+          logUi(`player sandbox native diagnostic: activation=${diagnostic.playerActivationSequence}, stage=${diagnostic.stage}, outcome=${diagnostic.outcome}, errorCode=${diagnostic.errorCode ?? 'none'}, responseBytes=${diagnostic.responseBytes}, mediaBytes=${diagnostic.mediaBytes}, decoderStarted=${diagnostic.decoderStarted}, outputStarted=${diagnostic.outputStarted}`);
+        } else if (activationFailure) {
+          sandboxPlaybackStatus.value = activationFailure;
+          logUi(`player sandbox activation diagnostic: ${activationFailure}`);
+        } else {
+          sandboxPlaybackStatus.value = formatSandboxAudioDiagnostic(diagnostic, expectedPlayerActivationSequence);
+        }
+      } catch {
+        sandboxPlaybackStatus.value = activationFailure ?? 'Falha nativa; não foi possível consultar o diagnóstico seguro desta ativação.';
+      }
+    }
+  } catch (error) {
+    sandboxPlaybackStatus.value = error instanceof Error && error.message === 'youtube_session_required'
+      ? 'Conecte a conta do YouTube Music antes de testar.'
+      : error instanceof Error && error.message === 'native_player_unavailable'
+        ? 'O estado do player nativo ainda não está disponível.'
+        : 'Não foi possível iniciar o teste. Consulte a mensagem de erro do aplicativo.';
+  } finally {
+    sandboxPlaybackBusy.value = false;
+  }
 }
 
 async function togglePlayback() {
@@ -1014,6 +1087,12 @@ function toggleFavorite(item: LibraryItem) {
   const index = favoriteTracks.value.findIndex((track) => track.id === item.id);
   if (index >= 0) favoriteTracks.value.splice(index, 1);
   else favoriteTracks.value.push(item);
+}
+
+function openArtwork(item: LibraryItem, event: MouseEvent) {
+  if (!item.coverUrl) return;
+  artworkViewerOrigin.value = event.currentTarget as HTMLElement;
+  artworkViewerTrack.value = item;
 }
 
 function isFavorite(item: LibraryItem) {
@@ -1236,6 +1315,17 @@ function handleVisualizerSelection(event: Event) {
 }
 
 onMounted(async () => {
+  if (isTauriRuntime()) void googleSyncService.isNativeRangeAvailable().then((available) => googleSyncService.useNativeRange(available));
+  if (import.meta.env.DEV && import.meta.env.VITE_YOUTUBE_PLAYLIST_PROBE === '1' && isTauriRuntime()) {
+    try {
+      const result = await invoke<{ readSucceeded: boolean; playlistCount: number; result: string }>(
+        'debug_youtube_playlist_probe_status',
+      );
+      console.info('[VibeDeck] YouTube playlist read probe:', result);
+    } catch {
+      console.info('[VibeDeck] YouTube playlist read probe: command_unavailable');
+    }
+  }
   document.addEventListener('click', handlePlayerBackgroundClick);
   window.addEventListener('vibedeck:select-visualizer', handleVisualizerSelection);
   window.addEventListener('vibedeck:shuffle-playlist', shuffleActivePlaylist);
@@ -1324,7 +1414,7 @@ onBeforeUnmount(() => {
 <template>
   <div :class="['app-shell', { 'light-theme': !darkMode, 'logs-open': screen === 'logs' }]">
     <aside class="sidebar">
-       <div class="brand"><div><span>Vibe</span><span class="brand-accent">Deck</span></div></div>
+       <div class="brand"><img class="brand-logo" src="/vibedeck-logo.png" alt="VibeDeck" /></div>
       <nav class="main-nav" aria-label="Navegacao principal"><button :class="['nav-item', { active: screen === 'home' }]" @click="screen = 'home'"><span>⌂</span> Inicio</button><button :class="['nav-item', { active: screen === 'libraries' }]" @click="screen = 'libraries'"><span>▱</span> Fontes</button></nav>
       <div class="source-section"><div class="section-label">FONTES</div><button v-for="library in libraryCards" :key="library.id" :class="['source-item', { active: screen === 'playlist' && selectedPlaylistId === library.id }]" @click="library.id === 'local' ? openPlaylist('local') : (screen = 'libraries')" @dragenter.prevent="dropTarget = library.id" @dragover.prevent="dropTarget = library.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event, library.id)"><span class="source-dot" :style="{ background: library.accent }"></span>{{ library.name }}</button></div>
       <div class="playlist-section"><div class="section-label">PLAYLISTS</div><button v-for="playlist in playlists" :key="playlist.id" :class="['playlist-item', { active: screen === 'playlist' && selectedPlaylistId === playlist.id, 'drop-target-item': dropTarget === playlist.id }]" @click="openPlaylist(playlist.id)" @dragenter.prevent="dropTarget = playlist.id" @dragover.prevent="dropTarget = playlist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event, playlist.id)"><span>♫</span>{{ playlist.name }}<span class="playlist-gear" aria-label="Configurar playlist" @click.stop="openPlaylistSettings(playlist)">⚙</span></button></div>
@@ -1353,7 +1443,7 @@ onBeforeUnmount(() => {
           <div v-if="localImport" class="local-import-status" role="status" aria-live="polite"><strong>{{ localImport.cancelled ? 'Cancelando importação...' : 'Importando arquivos locais' }}</strong><span>{{ localImport.processed }} de {{ localImport.total }} processados{{ localImport.currentPath ? ` · ${localImport.currentPath}` : '' }}</span><progress :max="Math.max(localImport.total, 1)" :value="localImport.processed"></progress><button :disabled="localImport.cancelled" @click="cancelLocalImport">Cancelar</button><small v-if="localImport.files.length">{{ summarizeImport(localImport.files).imported }} importada(s) · {{ summarizeImport(localImport.files).duplicates }} duplicata(s) · {{ summarizeImport(localImport.files).unsupported }} não suportada(s) · {{ summarizeImport(localImport.files).failed }} falha(s)</small></div>
            <Serpents3D v-if="selectedVisualizer === 'serpents'" class="playlist-visualizer" :levels="visualizerLevels" :active="isPlaying" :has-track="Boolean(currentTrack)" :density="serpentDensity" :detail="serpentDetail" :glow="serpentGlow" :resolution="serpentResolution" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" />
            <VisualizerCanvas v-else class="playlist-visualizer" :kind="selectedVisualizer" :levels="visualizerLevels" :active="isPlaying" :has-track="Boolean(currentTrack)" :serpent-density="serpentDensity" :serpent-detail="serpentDetail" :serpent-glow="serpentGlow" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" :bass-sensitivity="mascotBassSensitivity" :bass-distance="mascotBassDistance" :bass-min-hz="bassMinHz" :bass-max-hz="bassMaxHz" :energy-min-hz="energyMinHz" :energy-max-hz="energyMaxHz" :voice-min-hz="voiceMinHz" :voice-max-hz="voiceMaxHz" :motion-min-hz="motionMinHz" :motion-max-hz="motionMaxHz" compact />
-          <section class="library-section"><div class="section-heading"><div><p class="eyebrow">FAIXAS · {{ sourceLabel(activePlaylist.mode) }}</p><h2>{{ query ? 'Resultados da busca' : activePlaylist.name }}</h2></div><button v-if="activePlaylist.id !== 'favorites'" class="heading-gear" aria-label="Configurar playlist" @click="openPlaylistSettings(activePlaylist)">⚙</button></div><div class="track-list" @dragenter.prevent="dropTarget = activePlaylist.id" @dragover.prevent="dropTarget = activePlaylist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event)"><div v-for="(item, index) in filteredTracks" :key="`${item.id}-${index}`" class="track-row" role="button" tabindex="0" @click="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.enter="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.space.prevent="play(item, false, false, activePlaylist.tracks.indexOf(item))"><span class="track-index">{{ currentTrack?.id === item.id && isPlaying ? '▶' : String(index + 1).padStart(2, '0') }}</span><span class="cover" :style="{ background: item.accent }"><img v-if="item.coverUrl" :src="item.coverUrl" alt="" /><template v-else>{{ item.title.slice(0, 1) }}</template></span><span class="track-info"><strong>{{ item.title }}</strong><small>{{ item.artist }} · {{ item.album }}</small></span><span :class="['origin-badge', item.source]"><i></i>{{ sourceLabel(item.source) }}</span><button class="favorite-button" :aria-label="isFavorite(item) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'" @click.stop="toggleFavorite(item)">{{ isFavorite(item) ? '♥' : '♡' }}</button><span class="duration">{{ item.durationSeconds ? formatTime(item.durationSeconds) : item.duration }}</span></div><div v-if="!filteredTracks.length" class="empty-state"><strong>Playlist vazia</strong><span>Use a área abaixo para adicionar músicas locais.</span></div><MusicPickerMenu v-if="activePlaylist.allowLocal" :class="{ 'drop-target': dropTarget === activePlaylist.id }" @select="handlePickerSelection" /></div></section>
+          <section class="library-section"><div class="section-heading"><div><p class="eyebrow">FAIXAS · {{ sourceLabel(activePlaylist.mode) }}</p><h2>{{ query ? 'Resultados da busca' : activePlaylist.name }}</h2></div><button v-if="activePlaylist.id !== 'favorites'" class="heading-gear" aria-label="Configurar playlist" @click="openPlaylistSettings(activePlaylist)">⚙</button></div><div class="track-list" @dragenter.prevent="dropTarget = activePlaylist.id" @dragover.prevent="dropTarget = activePlaylist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event)"><div v-for="(item, index) in filteredTracks" :key="`${item.id}-${index}`" class="track-row" role="button" tabindex="0" @click="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.enter="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.space.prevent="play(item, false, false, activePlaylist.tracks.indexOf(item))"><span class="track-index">{{ currentTrack?.id === item.id && isPlaying ? '▶' : String(index + 1).padStart(2, '0') }}</span><button v-if="item.coverUrl" class="cover cover-button" type="button" :aria-label="`Abrir capa de ${item.title}`" @click.stop="openArtwork(item, $event)" @keydown.stop><img :src="item.coverUrl" alt="" draggable="false" /></button><span v-else class="cover cover-fallback" :style="{ background: item.accent }" aria-hidden="true">{{ item.title.slice(0, 1) }}</span><span class="track-info"><strong>{{ item.title }}</strong><small>{{ item.artist }} · {{ item.album }}</small></span><span :class="['origin-badge', item.source]"><i></i>{{ sourceLabel(item.source) }}</span><button class="favorite-button" :aria-label="isFavorite(item) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'" @click.stop="toggleFavorite(item)">{{ isFavorite(item) ? '♥' : '♡' }}</button><span class="duration">{{ item.durationSeconds ? formatTime(item.durationSeconds) : item.duration }}</span></div><div v-if="!filteredTracks.length" class="empty-state"><strong>Playlist vazia</strong><span>Use a área abaixo para adicionar músicas locais.</span></div><MusicPickerMenu v-if="activePlaylist.allowLocal" :class="{ 'drop-target': dropTarget === activePlaylist.id }" @select="handlePickerSelection" /></div></section>
       </template>
       <section v-else class="hero home-hero"><div><p class="eyebrow">VIBEDECK</p><h1>Seu som, do seu jeito.</h1><p class="hero-copy">Abra uma playlist na lateral para começar.</p></div></section>
        <button v-if="currentTrack" class="repeat-control" :class="repeatMode" :title="repeatMode === 'off' ? 'Sem repetição' : repeatMode === 'playlist' ? 'Repetir playlist' : 'Repetir faixa'" @click="cycleRepeatMode"><Repeat :size="16" :stroke-width="1.8" /><span v-if="repeatMode === 'track'" class="repeat-badge">1</span></button></main>
@@ -1364,11 +1454,11 @@ onBeforeUnmount(() => {
        <input ref="folderInput" class="hidden-input" type="file" accept="audio/*" webkitdirectory multiple @change="importFromInput" />
 <audio ref="audio" @loadedmetadata="handleMetadata" @ended="handleEnded" @timeupdate="handleTimeUpdate" @error="handleAudioError" />
        <Transition name="visualizer-drawer"><div v-if="visualizerOpen" class="visualizer-drawer"><section class="visualizer-drawer-content"><div class="visualizer-drawer-heading"><div><p class="eyebrow">VISUALIZADOR</p><h2>{{ currentTrack?.title || 'VibeDeck' }}</h2><small>{{ currentTrack?.artist || 'Selecione uma faixa para começar' }}</small></div></div><VisualizerControls v-model:sensitivity="visualizerSensitivity" v-model:smoothing="visualizerSmoothing" v-model:intensity="visualizerIntensity" v-model:motion="visualizerMotion" v-model:bass-sensitivity="mascotBassSensitivity" v-model:bass-distance="mascotBassDistance" v-model:bass-min-hz="bassMinHz" v-model:bass-max-hz="bassMaxHz" v-model:energy-min-hz="energyMinHz" v-model:energy-max-hz="energyMaxHz" v-model:voice-min-hz="voiceMinHz" v-model:voice-max-hz="voiceMaxHz" v-model:motion-min-hz="motionMinHz" v-model:motion-max-hz="motionMaxHz" :kind="selectedVisualizer" :visible="developerMode" /><Serpents3D v-if="selectedVisualizer === 'serpents'" :levels="visualizerLevels" :active="isPlaying" :density="serpentDensity" :detail="serpentDetail" :glow="serpentGlow" :resolution="serpentResolution" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" /><VisualizerCanvas v-else :kind="selectedVisualizer" :levels="visualizerLevels" :active="isPlaying" :serpent-density="serpentDensity" :serpent-detail="serpentDetail" :serpent-glow="serpentGlow" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" :bass-sensitivity="mascotBassSensitivity" :bass-distance="mascotBassDistance" :bass-min-hz="bassMinHz" :bass-max-hz="bassMaxHz" :energy-min-hz="energyMinHz" :energy-max-hz="energyMaxHz" :voice-min-hz="voiceMinHz" :voice-max-hz="voiceMaxHz" :motion-min-hz="motionMinHz" :motion-max-hz="motionMaxHz" /><div class="visualizer-drawer-status">{{ isPlaying ? 'Reagindo ao áudio em reprodução' : 'Dê play para ativar o movimento' }}</div></section></div></Transition>
-     <div v-if="settingsOpen" class="settings-overlay" @click.self="settingsOpen = false"><section class="settings-panel settings-shell"><button class="close-settings" @click="settingsOpen = false">×</button><aside class="settings-nav"><p class="eyebrow">PREFERÊNCIAS</p><h2>Configurações</h2><button :class="{ selected: settingsSection === 'general' }" @click="settingsSection = 'general'">Geral<small>Tema e comportamento</small></button><button :class="{ selected: settingsSection === 'visualizer' }" @click="settingsSection = 'visualizer'">Visualizador<small>Estilo e qualidade</small></button><button :class="{ selected: settingsSection === 'developer' }" @click="settingsSection = 'developer'">Desenvolvedor<small>Ferramentas internas</small></button></aside><div class="settings-content"><template v-if="settingsSection === 'general'"><p class="eyebrow">GERAL</p><h2>Aparência e comportamento</h2><label class="setting-row"><span><strong>Tema</strong><small>Escolha a aparência do VibeDeck.</small></span><span class="theme-switch"><button :class="{ selected: darkMode }" @click="darkMode = true">Escuro</button><button :class="{ selected: !darkMode }" @click="darkMode = false">Claro</button></span></label></template><template v-else-if="settingsSection === 'developer'"><p class="eyebrow">DESENVOLVEDOR</p><h2>Ferramentas internas</h2><label class="setting-row"><span><strong>Modo desenvolvedor</strong><small>Exibe ferramentas internas, como o painel de logs em tempo real.</small></span><span class="switch-control"><input type="checkbox" :checked="developerMode" @change="setDeveloperMode(($event.target as HTMLInputElement).checked)" /><i></i></span></label></template><template v-else><p class="eyebrow">VISUALIZADOR</p><h2>Escolha como o som aparece</h2><div class="visualizer-options"><button :class="{ selected: selectedVisualizer === 'mascot' }" @click="setVisualizer('mascot')"><span class="visualizer-preview mascot-preview"><VisualizerCanvas kind="mascot" compact /></span><span class="visualizer-card-title"><b>Mascote</b><em>2D</em></span><small>Órbitas e partículas</small></button><button :class="{ selected: selectedVisualizer === 'bars' }" @click="setVisualizer('bars')"><span class="visualizer-preview"><VisualizerCanvas kind="bars" compact /></span><span class="visualizer-card-title"><b>Barras</b><em>2D</em></span><small>Espectro minimalista</small></button><button :class="{ selected: selectedVisualizer === 'serpents' }" @click="setVisualizer('serpents')"><span class="visualizer-preview serpents-preview"><Serpents3D :density="serpentDensity" :detail="serpentDetail" :glow="serpentGlow" :resolution="serpentResolution" compact /></span><span class="visualizer-card-title"><b>Serpentes</b><em>3D</em></span><small>Escamas, volume e bloom</small></button></div><div v-if="selectedVisualizer === 'serpents'" class="serpent-controls"><label><span>Densidade <b>{{ serpentDensity.toFixed(1) }}</b></span><input v-model.number="serpentDensity" type="range" min="0.6" max="1.6" step="0.1" /></label><label><span>Detalhe das escamas <b>{{ serpentDetail.toFixed(1) }}</b></span><input v-model.number="serpentDetail" type="range" min="0.6" max="1.8" step="0.1" /></label><label><span>Glow vermelho <b>{{ serpentGlow.toFixed(1) }}</b></span><input v-model.number="serpentGlow" type="range" min="0" max="1.8" step="0.1" /></label><label><span>Resolução 3D <b>{{ serpentResolution.toFixed(1) }}x</b></span><input v-model.number="serpentResolution" type="range" min="0.5" max="2" step="0.1" /></label></div></template></div></section></div><div v-if="playlistSettingsOpen" class="settings-overlay" @click.self="playlistSettingsOpen = false"><section class="settings-panel"><button class="close-settings" @click="playlistSettingsOpen = false">×</button><p class="eyebrow">PLAYLIST</p><h2>Configurar playlist</h2><p class="settings-description">Defina quais tipos de música podem entrar nesta playlist.</p><div class="playlist-mode-options"><label v-for="mode in (['local', 'online', 'mixed'] as PlaylistMode[])" :key="mode" :class="['mode-option', { selected: playlistSettingsMode === mode }]" @click="playlistSettingsMode = mode"><input v-model="playlistSettingsMode" type="radio" :value="mode" /><span><strong>{{ mode === 'local' ? 'Somente local' : mode === 'online' ? 'Somente online' : 'Online e local' }}</strong><small>{{ mode === 'local' ? 'Aceita arquivos deste computador.' : mode === 'online' ? 'Aceita apenas faixas sincronizadas.' : 'Mistura as duas bibliotecas.' }}</small></span></label></div><button class="save-settings" @click="savePlaylistSettings">Salvar configuração</button></section></div>
+     <div v-if="settingsOpen" class="settings-overlay" @click.self="settingsOpen = false"><section class="settings-panel settings-shell"><button class="close-settings" @click="settingsOpen = false">×</button><aside class="settings-nav"><p class="eyebrow">PREFERÊNCIAS</p><h2>Configurações</h2><button :class="{ selected: settingsSection === 'general' }" @click="settingsSection = 'general'">Geral<small>Tema e comportamento</small></button><button :class="{ selected: settingsSection === 'visualizer' }" @click="settingsSection = 'visualizer'">Visualizador<small>Estilo e qualidade</small></button><button :class="{ selected: settingsSection === 'developer' }" @click="settingsSection = 'developer'">Desenvolvedor<small>Ferramentas internas</small></button></aside><div class="settings-content"><template v-if="settingsSection === 'general'"><p class="eyebrow">GERAL</p><h2>Aparência e comportamento</h2><label class="setting-row"><span><strong>Tema</strong><small>Escolha a aparência do VibeDeck.</small></span><span class="theme-switch"><button :class="{ selected: darkMode }" @click="darkMode = true">Escuro</button><button :class="{ selected: !darkMode }" @click="darkMode = false">Claro</button></span></label></template><template v-else-if="settingsSection === 'developer'"><p class="eyebrow">DESENVOLVEDOR</p><h2>Ferramentas internas</h2><label class="setting-row"><span><strong>Modo desenvolvedor</strong><small>Exibe ferramentas internas, como o painel de logs em tempo real.</small></span><span class="switch-control"><input type="checkbox" :checked="developerMode" @change="setDeveloperMode(($event.target as HTMLInputElement).checked)" /><i></i></span></label><PlayerSandboxFrame v-if="developerMode" :connected="googleConnected && nativePlayerConnection === 'connected'" :busy="sandboxPlaybackBusy" :status="sandboxPlaybackStatus" @play="playSandboxVideo" /></template><template v-else><p class="eyebrow">VISUALIZADOR</p><h2>Escolha como o som aparece</h2><div class="visualizer-options"><button :class="{ selected: selectedVisualizer === 'mascot' }" @click="setVisualizer('mascot')"><span class="visualizer-preview mascot-preview"><VisualizerCanvas kind="mascot" compact /></span><span class="visualizer-card-title"><b>Mascote</b><em>2D</em></span><small>Órbitas e partículas</small></button><button :class="{ selected: selectedVisualizer === 'bars' }" @click="setVisualizer('bars')"><span class="visualizer-preview"><VisualizerCanvas kind="bars" compact /></span><span class="visualizer-card-title"><b>Barras</b><em>2D</em></span><small>Espectro minimalista</small></button><button :class="{ selected: selectedVisualizer === 'serpents' }" @click="setVisualizer('serpents')"><span class="visualizer-preview serpents-preview"><Serpents3D :density="serpentDensity" :detail="serpentDetail" :glow="serpentGlow" :resolution="serpentResolution" compact /></span><span class="visualizer-card-title"><b>Serpentes</b><em>3D</em></span><small>Escamas, volume e bloom</small></button></div><div v-if="selectedVisualizer === 'serpents'" class="serpent-controls"><label><span>Densidade <b>{{ serpentDensity.toFixed(1) }}</b></span><input v-model.number="serpentDensity" type="range" min="0.6" max="1.6" step="0.1" /></label><label><span>Detalhe das escamas <b>{{ serpentDetail.toFixed(1) }}</b></span><input v-model.number="serpentDetail" type="range" min="0.6" max="1.8" step="0.1" /></label><label><span>Glow vermelho <b>{{ serpentGlow.toFixed(1) }}</b></span><input v-model.number="serpentGlow" type="range" min="0" max="1.8" step="0.1" /></label><label><span>Resolução 3D <b>{{ serpentResolution.toFixed(1) }}x</b></span><input v-model.number="serpentResolution" type="range" min="0.5" max="2" step="0.1" /></label></div></template></div></section></div><div v-if="playlistSettingsOpen" class="settings-overlay" @click.self="playlistSettingsOpen = false"><section class="settings-panel"><button class="close-settings" @click="playlistSettingsOpen = false">×</button><p class="eyebrow">PLAYLIST</p><h2>Configurar playlist</h2><p class="settings-description">Defina quais tipos de música podem entrar nesta playlist.</p><div class="playlist-mode-options"><label v-for="mode in (['local', 'online', 'mixed'] as PlaylistMode[])" :key="mode" :class="['mode-option', { selected: playlistSettingsMode === mode }]" @click="playlistSettingsMode = mode"><input v-model="playlistSettingsMode" type="radio" :value="mode" /><span><strong>{{ mode === 'local' ? 'Somente local' : mode === 'online' ? 'Somente online' : 'Online e local' }}</strong><small>{{ mode === 'local' ? 'Aceita arquivos deste computador.' : mode === 'online' ? 'Aceita apenas faixas sincronizadas.' : 'Mistura as duas bibliotecas.' }}</small></span></label></div><button class="save-settings" @click="savePlaylistSettings">Salvar configuração</button></section></div>
      <PlaylistShuffleButton v-if="screen === 'playlist' && activePlaylist?.tracks.length" />
       <QueuePanel v-model:open="queuePanelOpen" :tracks="queuePanelTracks" :current-track-id="currentTrack?.id ?? null" :current-track-index="queueIndex" :is-playing="isPlaying" @select-track="playQueueTrack" />
      <PlaylistLoadingOverlay v-if="isActivePlaylistLoading" />
-    <VisualizerTrackArtwork v-if="visualizerOpen" :track="currentTrack" />
+    <VisualizerTrackArtwork v-if="visualizerOpen" :track="currentTrack" /><TrackArtworkViewer :track="artworkViewerTrack" :origin="artworkViewerOrigin" @close="artworkViewerTrack = null" />
     <VisualizerPicker v-if="settingsOpen && settingsSection === 'visualizer'" v-model="selectedVisualizer" />
    </div>
  </template>
