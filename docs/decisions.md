@@ -90,3 +90,7 @@ no relay se ele não iniciar. O SABR completo continua sem implementação de pr
   - **Favoritos:** um flag por faixa, guardado como referência (fonte + id) num arquivo nativo. Global é todas; Local e cada fornecedor são filtros da mesma lista. Favoritar não escreve na conta do YouTube.
 - **Consequência:** a interface deixa de ter a lista especial `favorites`; as visões Global, Local e por fornecedor são derivadas. Migração do catálogo v1 para v2 preserva arquivos e faz backup.
 - **Revisão:** após a fase 1 (catálogo v2 e armazenamento de favoritos com testes).
+
+### D-018, licença: todos os direitos reservados (2026-11-06)
+
+O projeto é proprietário. `LICENSE` na raiz, `"license": "UNLICENSED"` no `package.json` e `license-file` nos `Cargo.toml` (com `publish = false` no app). Componentes de terceiros (`ytmusicapi`, `yt-dlp/ejs`, `meriyah`, `astring`) mantêm as próprias licenças e avisos, descritos na seção Attribution do README.

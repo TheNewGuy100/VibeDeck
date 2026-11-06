@@ -3,6 +3,7 @@ name = "vibedeck-decipher-eval"
 version = "0.0.0"
 edition = "2021"
 publish = false
+license-file = "../../LICENSE"
 
 [dependencies]
 # Do not enable rust-alloc/allocator: they disable Runtime::set_memory_limit.

@@ -96,6 +96,12 @@ build layer and must never be exposed to the frontend bundle.
 Enable YouTube Data API v3 in the Google Cloud project and add development
 accounts as OAuth test users.
 
+## License
+
+Copyright (c) 2026 Pedro Henrique Bohn Costa. All rights reserved. VibeDeck is
+proprietary software; see [LICENSE](LICENSE). Third-party components keep their
+own licenses (see Attribution).
+
 ## Attribution
 
 Protocol research includes the open-source project `ytmusicapi` by sigma67:

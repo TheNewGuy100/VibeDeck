@@ -3,6 +3,8 @@ name = "vibedeck"
 version = "0.1.0"
 description = "A fast desktop music client with unified local and YouTube libraries"
 authors = ["VibeDeck"]
+license-file = "../LICENSE"
+publish = false
 edition = "2021"
 
 [lib]
