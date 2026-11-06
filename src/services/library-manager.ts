@@ -60,3 +60,32 @@ export function formatBytes(bytes: number): string {
 export function pluralize(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
+
+export type SourceId = 'local' | 'youtube' | 'favorites';
+
+export interface SourceCard {
+  id: SourceId;
+  name: string;
+  description: string;
+  count: number;
+  countLabel: string;
+  accent: string;
+}
+
+/** The sources shown before their contents: one card each, in a fixed order. */
+export function buildSourceCards(input: {
+  libraries: readonly LibrarySummary[];
+  favoriteTracks: number;
+  youtube: { connected: boolean; playlists: number };
+}): SourceCard[] {
+  const localTracks = input.libraries.reduce((total, library) => total + library.count, 0);
+  return [
+    { id: 'local', name: 'Biblioteca local', description: 'Arquivos copiados para este computador.', count: input.libraries.length, countLabel: pluralize(input.libraries.length, 'biblioteca', 'bibliotecas') + ` · ${pluralize(localTracks, 'faixa', 'faixas')}`, accent: '#4ecba6' },
+    { id: 'youtube', name: 'YouTube Music', description: input.youtube.connected ? 'Conta conectada.' : 'Conta não conectada.', count: input.youtube.playlists, countLabel: input.youtube.connected ? pluralize(input.youtube.playlists, 'playlist', 'playlists') : 'Desconectado', accent: '#ff5f55' },
+    { id: 'favorites', name: 'Favoritos', description: 'Suas faixas favoritas de todas as fontes.', count: input.favoriteTracks, countLabel: pluralize(input.favoriteTracks, 'faixa', 'faixas'), accent: '#e6a85c' },
+  ];
+}
+
+export function isSourceId(value: unknown): value is SourceId {
+  return value === 'local' || value === 'youtube' || value === 'favorites';
+}

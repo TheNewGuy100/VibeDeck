@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LocalLibraryCatalog, ManagedTrackReference } from '../interfaces/library';
-import { formatBytes, normalizeLibraryName, pluralize, summarizeLibraries, uniqueLocalTracks, validateLibraryName } from './library-manager';
+import { buildSourceCards, formatBytes, isSourceId, normalizeLibraryName, pluralize, summarizeLibraries, uniqueLocalTracks, validateLibraryName } from './library-manager';
 
 const track = (id: string, byteLength: number, available = true): ManagedTrackReference => ({
   id, managedPath: `blobs/${id}.mp3`, contentHash: id, byteLength, extension: 'mp3', fileName: `${id}.mp3`, available,
@@ -60,5 +60,32 @@ describe('formatting', () => {
   it('pluralises', () => {
     expect(pluralize(1, 'faixa', 'faixas')).toBe('1 faixa');
     expect(pluralize(0, 'faixa', 'faixas')).toBe('0 faixas');
+  });
+});
+
+describe('source cards', () => {
+  const libraries = [
+    { id: 'a', name: 'A', count: 3, bytes: 1, unavailable: 0 },
+    { id: 'b', name: 'B', count: 1, bytes: 1, unavailable: 0 },
+  ];
+
+  it('lists the sources in a fixed order with their counts', () => {
+    const cards = buildSourceCards({ libraries, favoriteTracks: 5, youtube: { connected: true, playlists: 2 } });
+    expect(cards.map((card) => card.id)).toEqual(['local', 'youtube', 'favorites']);
+    expect(cards[0].countLabel).toBe('2 bibliotecas · 4 faixas');
+    expect(cards[1].countLabel).toBe('2 playlists');
+    expect(cards[2].countLabel).toBe('5 faixas');
+  });
+
+  it('shows the account as disconnected instead of a count', () => {
+    const [, youtube] = buildSourceCards({ libraries: [], favoriteTracks: 0, youtube: { connected: false, playlists: 0 } });
+    expect(youtube.countLabel).toBe('Desconectado');
+    expect(youtube.description).toContain('não conectada');
+  });
+
+  it('recognises valid source ids', () => {
+    expect(isSourceId('local')).toBe(true);
+    expect(isSourceId('spotify')).toBe(false);
+    expect(isSourceId(null)).toBe(false);
   });
 });

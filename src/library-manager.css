@@ -52,3 +52,15 @@
 .hero-actions button:hover { border-color: #4b566b; }
 .hero-actions button.danger { color: #ff8a80; }
 .hero-actions button:focus-visible { outline: 2px solid #b9f36b; outline-offset: 2px; }
+.lib-sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.lib-source { --accent: #4ecba6; display: grid; gap: 4px; justify-items: start; padding: 16px; border: 1px solid #252b37; border-radius: 14px; color: #e8ebf2; background: #11141c; text-align: left; cursor: pointer; position: relative; }
+.lib-source:hover { border-color: #3a4456; }
+.lib-source.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, #11141c); box-shadow: 0 0 0 1px var(--accent) inset; }
+.lib-source:focus-visible { outline: 2px solid #b9f36b; outline-offset: 2px; }
+.lib-source-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.lib-source strong { font-size: 15px; }
+.lib-source-count { color: #d8dde8; font-size: 12px; font-weight: 700; }
+.lib-source small { color: #8a93a4; font-size: 11px; }
+.light-theme .lib-source { color: #1c2230; background: #fff; border-color: #d5dae4; }
+.light-theme .lib-source.active { background: color-mix(in srgb, var(--accent) 12%, #fff); }
+.light-theme .lib-source-count { color: #1c2230; }
