@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { type LibraryItem, type LibrarySource, type Playlist, type PlaylistMode } from './models/library';
-import type { LocalImportFileResult, LocalImportProgress, LocalLibraryCatalog, PlaylistCatalogSnapshot } from './interfaces/library';
+import type { ImportLocalPathsRequest, LocalImportFileResult, LocalImportProgress, LocalLibraryCatalog, OrphanReport, PlaylistCatalogSnapshot } from './interfaces/library';
 import { isCurrentPlayerEndEvent, type NativeSeekIntent, type NativeSeekRequest, type PlayerConnection, type PlayerQueuePanelEvents, type PlayerQueueTrack, type PlayerSnapshot, type VolumeIntent } from './interfaces/player';
 import { youtubeMusicSource } from './services/music-source';
 import { googleSyncService } from './services/google-sync';
-import { clearAppLogs, exportAppLogs, getAppLogs, getAppWebviews, getYouTubePlaylistDebugState, listenAppLogs, setAppWebviewVisible, writeAppLog, type AppLogEntry, type AppWebviewInfo } from './services/app-logs';
+import { exportAppLogs, getAppLogs, getAppWebviews, getYouTubePlaylistDebugState, listenAppLogs, setAppWebviewVisible, writeAppLog, type AppLogEntry, type AppWebviewInfo, type LogLevel } from './services/app-logs';
 import { Heart, Pause, Play, Repeat, SkipBack, SkipForward, Volume2, VolumeX } from '@lucide/vue';
 import VisualizerCanvas, { type VisualizerKind } from './visualizers/VisualizerCanvas.vue';
 import VisualizerControls from './visualizers/VisualizerControls.vue';
@@ -14,6 +14,12 @@ import PlaylistShuffleButton from './components/PlaylistShuffleButton.vue';
 import QueuePanel from './components/QueuePanel.vue';
 import PlaylistLoadingOverlay from './components/PlaylistLoadingOverlay.vue';
 import AccountMenu from './components/AccountMenu.vue';
+import { applyFavorite, favoriteKey, favoritePlaylists, favoritesService, isFavoritesPlaylistId, toFavoriteItem, type FavoriteItem } from './services/favorites';
+import LogsDrawer from './components/LogsDrawer.vue';
+import LibraryManager from './components/LibraryManager.vue';
+import { YouTubeLoginError } from './services/youtube-login';
+import { isTrackUnavailable, playableTracks, unavailableLabel, unavailableMessage, unavailableReasonOf } from './services/track-availability';
+import { summarizeLibraries, uniqueLocalTracks } from './services/library-manager';
 import MusicPickerMenu from './components/MusicPickerMenu.vue';
 import TrackArtworkViewer from './components/TrackArtworkViewer.vue';
 import PlayerSandboxFrame from './components/PlayerSandboxFrame.vue';
@@ -30,7 +36,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 const Serpents3D = defineAsyncComponent(() => import('./visualizers/Serpents3D.vue'));
 
-type Screen = 'home' | 'libraries' | 'playlist' | 'logs';
+type Screen = 'home' | 'libraries' | 'playlist';
 type UserSettings = { darkMode: boolean; developerMode: boolean; visualizer: VisualizerKind; serpentDensity: number; serpentDetail: number; serpentGlow: number; serpentResolution: number; volume: number; isMuted: boolean; visualizerSensitivity: number; visualizerSmoothing: number; visualizerIntensity: number; visualizerMotion: number; mascotBassSensitivity: number; mascotBassDistance: number; bassMinHz: number; bassMaxHz: number; energyMinHz: number; energyMaxHz: number; voiceMinHz: number; voiceMaxHz: number; motionMinHz: number; motionMaxHz: number };
 
 const userSettingsKey = 'vibedeck:user-settings';
@@ -45,7 +51,11 @@ const localLibraryLoading = ref(false);
 const localLibraryError = ref<string | null>(null);
 const localStaleTrackCount = ref(0);
 const localImport = ref<{ operationId: string; processed: number; total: number; currentPath: string; files: LocalImportFileResult[]; cancelled: boolean } | null>(null);
-const favoriteTracks = ref<LibraryItem[]>([]);
+const libraryManager = ref<InstanceType<typeof LibraryManager> | null>(null);
+const orphanReport = ref<OrphanReport | null>(null);
+const libraryBusy = ref(false);
+const favoriteItems = ref<FavoriteItem[]>([]);
+let favoriteSequence = 0;
 const onlinePlaylists = ref<Playlist[]>([]);
 const searchPlaylist = ref<Playlist | null>(null);
 const currentTrack = ref<LibraryItem | null>(null);
@@ -99,7 +109,7 @@ const motionMinHz = ref(savedSettings.motionMinHz);
 const motionMaxHz = ref(savedSettings.motionMaxHz);
 const usingNativeAudio = ref(false);
 const dropTarget = ref<string | null>(null);
-const playlistModes = ref<Record<string, PlaylistMode>>({ local: 'local', favorites: 'mixed' });
+const playlistModes = ref<Record<string, PlaylistMode>>({ local: 'local' });
 const playlistSettingsOpen = ref(false);
 const playlistSettingsId = ref<string | null>(null);
 const playlistSettingsMode = ref<PlaylistMode>('local');
@@ -109,9 +119,7 @@ const loadingPlaylistGeneration = ref<number | null>(null);
 const fullyLoadedPlaylists = ref(new Set<string>());
 const playlistPaginationOperations = new PlaylistOperationRegistry<void>();
 const appLogs = ref<AppLogEntry[]>([]);
-const logSearch = ref('');
-const logLevelFilter = ref<'all' | 'info' | 'error'>('all');
-const logSourceFilter = ref('all');
+const logsOpen = ref(false);
 const appWebviews = ref<AppWebviewInfo[]>([]);
 const changingWebviewLabel = ref<string | null>(null);
 const VISUALIZER_POLL_INTERVAL_MS = 33;
@@ -159,8 +167,9 @@ function reconcilePlaylistCatalog(snapshot: PlaylistCatalogSnapshot) {
   });
 }
 
-async function hydratePlaylistCatalog() {
-  if (!isTauriRuntime()) return;
+/** The cached catalog belongs to the signed-in account: without a session it is never shown. */
+async function hydratePlaylistCatalog(force = false) {
+  if (!isTauriRuntime() || (!force && !googleConnected.value)) return;
   try {
     const snapshot = await googleSyncService.loadPlaylistCatalog();
     playlistOpenGeneration = Math.max(playlistOpenGeneration, ...snapshot.playlists.map((playlist) => playlist.generation));
@@ -172,12 +181,14 @@ async function hydratePlaylistCatalog() {
   }
 }
 
+const localTrackById = computed(() => new Map(localTracks.value.map((track) => [track.id, track])));
+const favoriteKeys = computed(() => new Set(favoriteItems.value.map(favoriteKey)));
 const playlists = computed<Playlist[]>(() => [
   ...(searchPlaylist.value ? [searchPlaylist.value] : []),
   ...onlinePlaylists.value,
   ...localCatalog.value.playlists.map(localPlaylistToPlaylist),
-  { id: 'local', name: 'Biblioteca local', source: 'local', mode: playlistModes.value.local, tracks: localTracks.value, allowLocal: playlistModes.value.local !== 'online' },
-  { id: 'favorites', name: 'Favoritos', source: playlistModes.value.favorites, mode: playlistModes.value.favorites, tracks: favoriteTracks.value, allowLocal: playlistModes.value.favorites !== 'online' },
+  { id: 'local', name: 'Todas as locais', source: 'local', mode: playlistModes.value.local, tracks: localTracks.value, allowLocal: playlistModes.value.local !== 'online' },
+  ...favoritePlaylists(favoriteItems.value, localTrackById.value, { youtubeSignedIn: googleConnected.value }),
 ]);
 const activePlaylist = computed(() => playlists.value.find((playlist) => playlist.id === selectedPlaylistId.value) ?? playlists.value[0]);
 const queuePanelTracks = computed<PlayerQueueTrack[]>(() => queue.value.map((item) => ({
@@ -195,19 +206,20 @@ const filteredTracks = computed(() => {
 const isActivePlaylistLoading = computed(() => loadingPlaylistId.value === activePlaylist.value.id);
 const canRevealActivePlaylistTracks = computed(() => shouldRevealPlaylistTracks(isActivePlaylistLoading.value ? 'loading' : 'complete'));
 const progressPercent = computed(() => duration.value > 0 ? (currentTime.value / duration.value) * 100 : 0);
+const localLibraryIds = computed(() => new Set(localCatalog.value.playlists.map((playlist) => playlist.id)));
+const librarySummaries = computed(() => summarizeLibraries(localCatalog.value));
+const favoriteSummaries = computed(() => playlists.value.filter((playlist) => isFavoritesPlaylistId(playlist.id)).map((playlist) => ({ id: playlist.id, name: playlist.name, count: playlist.tracks.length })));
+const youtubeSummary = computed(() => ({ connected: googleConnected.value, playlists: onlinePlaylists.value.length, tracks: onlinePlaylists.value.reduce((total, playlist) => total + playlist.tracks.length, 0) }));
+const sidebarSections = computed(() => [
+  { label: 'FAVORITOS', icon: '♥', gear: false, items: playlists.value.filter((playlist) => isFavoritesPlaylistId(playlist.id)) },
+  { label: 'BIBLIOTECAS LOCAIS', icon: '♫', gear: false, items: playlists.value.filter((playlist) => playlist.id === 'local' || localLibraryIds.value.has(playlist.id)) },
+  { label: 'YOUTUBE MUSIC', icon: '♫', gear: true, items: playlists.value.filter((playlist) => !isFavoritesPlaylistId(playlist.id) && playlist.id !== 'local' && !localLibraryIds.value.has(playlist.id)) },
+]);
+const activeLocalLibrary = computed(() => (localLibraryIds.value.has(activePlaylist.value?.id ?? '') ? activePlaylist.value : null));
 const libraryCards = computed(() => [
   { id: 'local', name: 'Biblioteca local', description: 'Arquivos armazenados neste computador.', count: localTracks.value.length, source: 'local' as const, accent: '#4ecba6' },
   { id: 'youtube', name: 'YouTube Music', description: googleConnected.value ? 'Biblioteca sincronizada com sua conta Google.' : 'Conecte sua conta Google para sincronizar.', count: onlinePlaylists.value.reduce((total, playlist) => total + playlist.tracks.length, 0), source: 'youtube' as const, accent: '#ff5f55' },
 ]);
-const logSources = computed(() => Array.from(new Set(appLogs.value.map((entry) => entry.source))).sort());
-const filteredLogs = computed(() => {
-  const search = logSearch.value.trim().toLowerCase();
-  return appLogs.value.filter((entry) => {
-    if (logLevelFilter.value !== 'all' && entry.level !== logLevelFilter.value) return false;
-    if (logSourceFilter.value !== 'all' && entry.source !== logSourceFilter.value) return false;
-    return !search || `${entry.source} ${entry.window ?? ''} ${entry.operation} ${entry.message}`.toLowerCase().includes(search);
-  }).toReversed();
-});
 
 function showToast(message: string, tone: 'success' | 'error' = 'error') {
   const id = Date.now() + Math.random();
@@ -253,7 +265,7 @@ function saveUserSettings() {
 
 function applyLocalCatalog(catalog: LocalLibraryCatalog) {
   localCatalog.value = catalog;
-  localTracks.value = catalog.playlists.flatMap((playlist) => playlist.tracks.map((track) => ({ ...localPlaylistToPlaylist({ ...playlist, tracks: [track] }).tracks[0] })));
+  localTracks.value = uniqueLocalTracks(catalog.playlists.map((playlist) => localPlaylistToPlaylist(playlist).tracks));
   if (selectedPlaylistId.value !== 'local'
     && !playlists.value.some((playlist) => playlist.id === selectedPlaylistId.value)
     && !(usingNativeAudio.value && queuePlaylistId.value)) selectedPlaylistId.value = 'local';
@@ -293,17 +305,20 @@ async function importNativePaths(paths: string[], playlistId = selectedPlaylistI
     showToast('Arquivos locais só podem ser importados em playlists locais ou mistas.');
     return;
   }
+  const isLibrary = localLibraryIds.value.has(target.id);
+  await runLocalImport(paths, isLibrary ? { libraryId: target.id } : { playlistName: 'Biblioteca local' });
+}
+
+/** Folders chosen in a picker become libraries named after the folder (D-011). */
+async function runLocalImport(paths: string[], request: Partial<ImportLocalPathsRequest> = {}) {
   if (!paths.length) return;
   const operationId = `local-import-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const generation = ++localLibraryGeneration;
   localImportGeneration = generation;
   localImport.value = { operationId, processed: 0, total: paths.length, currentPath: '', files: [], cancelled: false };
-  const onProgress = (progress: LocalImportProgress) => {
-    if (progress.operationId !== operationId || generation !== localLibraryGeneration) return;
-    localImport.value = { ...(localImport.value as NonNullable<typeof localImport.value>), ...progress };
-  };
+  libraryBusy.value = true;
   try {
-    const result = await localLibraryService.importPaths({ paths, playlistName: target.name, operationId });
+    const result = await localLibraryService.importPaths({ playlistName: 'Biblioteca local', ...request, paths, operationId });
     if (generation !== localLibraryGeneration || result.operationId !== operationId) return;
     applyLocalCatalog(result.catalog);
     localImport.value = { ...(localImport.value as NonNullable<typeof localImport.value>), files: result.files, cancelled: result.cancelled, processed: result.files.length, total: result.files.length, currentPath: '' };
@@ -312,6 +327,7 @@ async function importNativePaths(paths: string[], playlistId = selectedPlaylistI
   } catch (error) {
     if (generation === localLibraryGeneration) showToast(error instanceof Error ? error.message : 'Não foi possível importar os arquivos locais.');
   } finally {
+    libraryBusy.value = false;
     if (generation === localLibraryGeneration) window.setTimeout(() => { if (localImport.value?.operationId === operationId) localImport.value = null; }, 5000);
   }
 }
@@ -431,7 +447,7 @@ function setQueueContext(playlist: Playlist | undefined) {
   queueShuffled.value = false;
   const currentId = currentTrack.value?.id;
   const context = playlist
-    ? createQueueContext(playlist.id, playlist.tracks, queueGeneration.value, currentId ? playlist.tracks.findIndex((track) => track.id === currentId) : -1, playlist.source)
+    ? createQueueContext(playlist.id, playableTracks(playlist.tracks), queueGeneration.value, currentId ? playableTracks(playlist.tracks).findIndex((track) => track.id === currentId) : -1, playlist.source)
     : undefined;
   queue.value = context?.tracks ?? [];
   queueIndex.value = context?.index ?? -1;
@@ -447,8 +463,8 @@ function queueOwnsTrack(item: LibraryItem, playlist: Playlist | undefined) {
     && playlist.tracks.some((track) => track.id === item.id));
 }
 
-function logUi(message: string) {
-  void writeAppLog({ message, operation: 'ui', correlationId: `ui-${Date.now()}` });
+function logUi(message: string, level?: LogLevel) {
+  void writeAppLog({ message, operation: 'ui', correlationId: `ui-${Date.now()}`, level });
 }
 
 async function logPlaylistBridgeState(context: string) {
@@ -494,15 +510,6 @@ async function toggleWebviewVisibility(webview: AppWebviewInfo) {
   }
 }
 
-function formatLogTime(timestamp: number) {
-  return new Date(timestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-async function clearLogs() {
-  await clearAppLogs();
-  appLogs.value = [];
-}
-
 async function exportLogs() {
   try {
     const path = await exportAppLogs();
@@ -514,12 +521,11 @@ async function exportLogs() {
 
 function setDeveloperMode(enabled: boolean) {
   developerMode.value = enabled;
-  if (!enabled && screen.value === 'logs') screen.value = 'libraries';
+  if (!enabled) logsOpen.value = false;
 }
 
 function openLogs() {
-  visualizerOpen.value = false;
-  screen.value = 'logs';
+  logsOpen.value = true;
 }
 
 function setVisualizer(kind: VisualizerKind) {
@@ -533,7 +539,7 @@ function updateLogsPolling() {
     window.clearInterval(logsRefreshTimer);
     logsRefreshTimer = undefined;
   }
-  if (developerMode.value && screen.value === 'logs') {
+  if (developerMode.value && logsOpen.value) {
     void refreshAppLogs();
     void refreshAppWebviews();
     logsRefreshTimer = window.setInterval(() => { void refreshAppLogs(); void refreshAppWebviews(); }, 1000);
@@ -672,21 +678,23 @@ function openPlaylistSettings(playlist: Playlist) {
 
 function shuffleActivePlaylist() {
   const playlist = activePlaylist.value;
-  if (!playlist || playlist.tracks.length < 2) return;
+  if (!playlist || playableTracks(playlist.tracks).length < 2) return;
   setQueueContext(playlist);
   const context = shuffleQueueContext({ playlistId: playlist.id, source: playlist.source, generation: queueGeneration.value, index: queueIndex.value, tracks: [...queue.value], shuffled: false });
   queue.value = context.tracks;
   queueIndex.value = context.index;
   queueShuffled.value = true;
-  void play(queue.value[0], true);
+  if (queue.value[0]) void play(queue.value[0], true);
 }
 
 function playSourceTrack(item: LibraryItem) {
   const playlist = activePlaylist.value;
   if (!playlist) return;
-  const selectedIndex = playlist.tracks.findIndex((track) => track.id === item.id);
+  if (isTrackUnavailable(item)) { showToast(unavailableMessage(item)); return; }
+  const playable = playableTracks(playlist.tracks);
+  const selectedIndex = playable.findIndex((track) => track.id === item.id);
   if (selectedIndex < 0) return;
-  const sequence = createSelectedTrackQueue(playlist.tracks, selectedIndex, repeatMode.value);
+  const sequence = createSelectedTrackQueue(playable, selectedIndex, repeatMode.value);
   queueGeneration.value += 1;
   queueActivationPending.value = true;
   queuePlaylistId.value = playlist.id;
@@ -722,30 +730,57 @@ function savePlaylistSettings() {
 }
 
 async function syncGoogle() {
-  try {
-      await googleSyncService.connectYouTubeMusic();
-      onlinePlaylists.value = await googleSyncService.loadYouTubePlaylists();
-      await hydratePlaylistCatalog();
+  const loadAccount = async () => {
+    onlinePlaylists.value = await googleSyncService.loadYouTubePlaylists();
+    await hydratePlaylistCatalog(true);
     googleConnected.value = true;
     showToast(`${onlinePlaylists.value.length} playlists carregadas.`, 'success');
+  };
+  try {
+    await googleSyncService.connectYouTubeMusic();
+    await loadAccount();
   } catch (error) {
+    // A login that was cancelled, closed or timed out is final: do not pop a second window.
+    if (error instanceof YouTubeLoginError) {
+      showToast(error.message);
+      return;
+    }
+    // A stored session that no longer works: sign in again once.
     try {
       await googleSyncService.connectYouTubeMusic(true);
-        onlinePlaylists.value = await googleSyncService.loadYouTubePlaylists();
-        await hydratePlaylistCatalog();
-      googleConnected.value = true;
-      showToast(`${onlinePlaylists.value.length} playlists carregadas.`, 'success');
+      await loadAccount();
     } catch (retryError) {
       showToast(retryError instanceof Error ? retryError.message : 'Não foi possível conectar ao YouTube Music.');
     }
   }
 }
 
+/** Drops every in-memory trace of the account. Favourites stay, listed as unavailable until sign-in. */
+function clearYouTubeState() {
+  googleConnected.value = false;
+  onlinePlaylists.value = [];
+  searchPlaylist.value = null;
+  fullyLoadedPlaylists.value = new Set();
+  loadingPlaylistId.value = null;
+  if (currentTrack.value?.source === 'youtube') {
+    void googleSyncService.stopAudio().catch(() => undefined);
+    isPlaying.value = false;
+    usingNativeAudio.value = false;
+    currentTrack.value = null;
+    queue.value = [];
+    queueIndex.value = -1;
+    queuePlaylistId.value = null;
+  }
+  if (!playlists.value.some((playlist) => playlist.id === selectedPlaylistId.value)) {
+    selectedPlaylistId.value = 'local';
+    if (screen.value === 'playlist') screen.value = 'libraries';
+  }
+}
+
 async function disconnectGoogle() {
   try {
     await googleSyncService.disconnectYouTubeMusic();
-    googleConnected.value = false;
-    onlinePlaylists.value = [];
+    clearYouTubeState();
     showToast('Conta Google desconectada.', 'success');
   } catch (error) {
     const normalized = reportBridgeFailure(error, 'disconnect_youtube_music');
@@ -757,6 +792,7 @@ async function restoreGoogleSession() {
   try {
     googleConnected.value = await googleSyncService.restoreYouTubeSession();
     if (googleConnected.value) {
+      await hydratePlaylistCatalog();
       onlinePlaylists.value = await googleSyncService.loadYouTubePlaylists();
       await hydratePlaylistCatalog();
     }
@@ -778,6 +814,11 @@ async function searchLibrary() {
 }
 
 async function play(item: LibraryItem, fromQueue = false, forceRestart = false, selectedTrackIndex?: number, onPlaybackFailure?: (error: unknown) => void) {
+  // Unavailable tracks (signed out, file missing) are listed but never started directly.
+  if (isTrackUnavailable(item)) {
+    showToast(unavailableMessage(item));
+    return;
+  }
   const visiblePlaylist = activePlaylist.value;
   if (!fromQueue && visiblePlaylist?.id.startsWith('VLPL') && visiblePlaylist.source === 'online' && !fullyLoadedPlaylists.value.has(visiblePlaylist.id)) {
     const playlistId = visiblePlaylist.id;
@@ -795,13 +836,15 @@ async function play(item: LibraryItem, fromQueue = false, forceRestart = false, 
     ? { id: queuePlaylistId.value, name: 'Fila do player', source: queueSource.value, mode: queueSource.value === 'youtube' || queueSource.value === 'online' ? 'online' as const : 'local' as const, tracks: [...queue.value] }
     : visiblePlaylist;
   if (!fromQueue && visiblePlaylist?.tracks.some((track) => track.id === item.id)) {
-    const selected = selectedTrackIndex !== undefined
+    const playable = playableTracks(visiblePlaylist.tracks);
+    const chosen = selectedTrackIndex !== undefined
       && selectedTrackIndex >= 0
       && selectedTrackIndex < visiblePlaylist.tracks.length
       && visiblePlaylist.tracks[selectedTrackIndex].id === item.id
-      ? selectedTrackIndex
-      : visiblePlaylist.tracks.findIndex((track) => track.id === item.id);
-    const sequence = createSelectedTrackQueue(visiblePlaylist.tracks, selected, repeatMode.value);
+      ? visiblePlaylist.tracks[selectedTrackIndex]
+      : item;
+    const selected = playable.indexOf(chosen) >= 0 ? playable.indexOf(chosen) : playable.findIndex((track) => track.id === item.id);
+    const sequence = createSelectedTrackQueue(playable, selected, repeatMode.value);
     queueGeneration.value += 1;
     queueActivationPending.value = true;
     queuePlaylistId.value = visiblePlaylist.id;
@@ -1036,7 +1079,7 @@ function cycleRepeatMode() {
         currentIndex,
         previousMode,
         repeatMode.value,
-        sourcePlaylist?.tracks ?? queue.value,
+        playableTracks(sourcePlaylist?.tracks ?? queue.value),
         currentTrack.value.id,
       );
       queue.value = sequence.tracks;
@@ -1083,10 +1126,31 @@ function moveAfterTrackEnded(expected?: { trackId?: string; queueGeneration: num
   void play(queue.value[queueIndex.value], true, nextIndex === index);
 }
 
-function toggleFavorite(item: LibraryItem) {
-  const index = favoriteTracks.value.findIndex((track) => track.id === item.id);
-  if (index >= 0) favoriteTracks.value.splice(index, 1);
-  else favoriteTracks.value.push(item);
+async function loadFavorites() {
+  if (!isTauriRuntime()) return;
+  try {
+    favoriteItems.value = (await favoritesService.load()).items;
+  } catch (error) {
+    logUi(`favorites load failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    showToast(error instanceof Error ? error.message : 'Não foi possível carregar os favoritos.');
+  }
+}
+
+/** Updates the list at once, then confirms with the native store; the latest toggle wins. */
+async function toggleFavorite(item: LibraryItem) {
+  const favorite = !isFavorite(item);
+  const entry = toFavoriteItem(item);
+  const previous = favoriteItems.value;
+  const sequence = ++favoriteSequence;
+  favoriteItems.value = applyFavorite(previous, entry, favorite);
+  if (!isTauriRuntime()) return;
+  try {
+    const store = await favoritesService.set(entry, favorite);
+    if (sequence === favoriteSequence) favoriteItems.value = store.items;
+  } catch (error) {
+    if (sequence === favoriteSequence) favoriteItems.value = previous;
+    showToast(error instanceof Error ? error.message : 'Não foi possível salvar o favorito.');
+  }
 }
 
 function openArtwork(item: LibraryItem, event: MouseEvent) {
@@ -1096,7 +1160,7 @@ function openArtwork(item: LibraryItem, event: MouseEvent) {
 }
 
 function isFavorite(item: LibraryItem) {
-  return favoriteTracks.value.some((track) => track.id === item.id);
+  return favoriteKeys.value.has(favoriteKey(item));
 }
 
 function addFilesToPlaylist(files: File[], playlistId = selectedPlaylistId.value) {
@@ -1118,7 +1182,6 @@ function addFilesToPlaylist(files: File[], playlistId = selectedPlaylistId.value
   imported.forEach((item) => { if (item.audioUrl) transientObjectUrls.add(item.audioUrl); });
   if (!imported.length) return;
   localTracks.value.push(...imported);
-  if (playlistId === 'favorites') favoriteTracks.value.push(...imported);
   if (playlistId === selectedPlaylistId.value) setQueueContext(playlists.value.find((playlist) => playlist.id === playlistId));
 }
 
@@ -1284,18 +1347,85 @@ function handlePlayerBackgroundClick(event: MouseEvent) {
   const target = event.target as HTMLElement;
   if (target.closest('.player-bar') && !target.closest('button, input')) visualizerOpen.value = !visualizerOpen.value;
 }
-async function openNativePicker(directory: boolean) {
+async function openNativePicker(directory: boolean, destination?: { libraryId: string | null; subfoldersAsLibraries?: boolean }) {
   if (!isTauriRuntime()) {
     (directory ? folderInput : fileInput).value?.click();
     return;
   }
   try {
     const paths = selectedDialogPaths(await localLibraryService.pickPaths(directory));
-    if (paths.length) await importNativePaths(paths);
+    if (!paths.length) return;
+    if (destination) {
+      await runLocalImport(paths, {
+        ...(destination.libraryId ? { libraryId: destination.libraryId } : {}),
+        folderLibraries: directory,
+        subfoldersAsLibraries: directory && Boolean(destination.subfoldersAsLibraries),
+      });
+    } else if (directory) {
+      await runLocalImport(paths, { folderLibraries: true });
+    } else {
+      await importNativePaths(paths);
+    }
   } catch (error) {
     showToast(error instanceof Error ? error.message : 'Não foi possível abrir o seletor nativo.');
   }
 }
+async function refreshOrphans() {
+  if (!isTauriRuntime()) return;
+  try {
+    orphanReport.value = await localLibraryService.previewOrphans();
+  } catch {
+    orphanReport.value = null;
+  }
+}
+
+async function mutateLibraries(action: () => Promise<{ catalog: LocalLibraryCatalog }>, failure: string, success?: string) {
+  libraryBusy.value = true;
+  try {
+    const result = await action();
+    applyLocalCatalog(result.catalog);
+    if (success) showToast(success, 'success');
+    void refreshOrphans();
+    return true;
+  } catch (error) {
+    showToast(typeof error === 'string' ? error : error instanceof Error ? error.message : failure);
+    return false;
+  } finally {
+    libraryBusy.value = false;
+  }
+}
+
+async function createLibrary(name: string) {
+  await mutateLibraries(() => localLibraryService.createLibrary(name), 'Não foi possível criar a biblioteca.', `Biblioteca “${name}” criada.`);
+}
+
+async function renameLibrary(id: string, name: string) {
+  await mutateLibraries(() => localLibraryService.renameLibrary(id, name), 'Não foi possível renomear a biblioteca.');
+}
+
+async function deleteLibrary(id: string) {
+  const name = localCatalog.value.playlists.find((library) => library.id === id)?.name ?? 'Biblioteca';
+  const wasActive = selectedPlaylistId.value === id;
+  const done = await mutateLibraries(() => localLibraryService.deleteLibrary(id), 'Não foi possível excluir a biblioteca.', `“${name}” excluída. Arquivos sem uso podem ser limpos em Fontes.`);
+  if (done && wasActive) { selectedPlaylistId.value = 'local'; screen.value = 'libraries'; }
+}
+
+async function purgeOrphans() {
+  await mutateLibraries(async () => {
+    const result = await localLibraryService.purgeOrphans();
+    showToast(`${result.removedCount} arquivo(s) apagado(s).`, 'success');
+    return result;
+  }, 'Não foi possível limpar os arquivos sem uso.');
+}
+
+function hubImportFiles(libraryId: string | null) {
+  void openNativePicker(false, { libraryId });
+}
+
+function hubImportFolder(libraryId: string | null, subfoldersAsLibraries: boolean) {
+  void openNativePicker(true, { libraryId, subfoldersAsLibraries });
+}
+
 function handlePickerSelection(directory: boolean) { void openNativePicker(directory); }
 function sourceLabel(source: LibrarySource | PlaylistMode) { return source === 'local' ? 'Local' : source === 'youtube' ? 'YouTube Music' : source === 'online' ? 'Online' : 'Misto'; }
 function handleVisualizerSelection(event: Event) {
@@ -1332,6 +1462,7 @@ onMounted(async () => {
   document.addEventListener('scroll', handleCapturedScroll, true);
   void refreshAppLogs();
   void refreshAppWebviews();
+  void loadFavorites();
   audioPositionTimer = window.setInterval(refreshNativeAudioPosition, 250);
   // Poll below the native FFT hop rate without stacking bridge requests.
   audioLevelTimer = window.setInterval(refreshVisualizerLevels, VISUALIZER_POLL_INTERVAL_MS);
@@ -1368,7 +1499,7 @@ onMounted(async () => {
   }
   void loadLocalLibrary();
    void restoreNativePlayerReference();
-    void hydratePlaylistCatalog().then(() => restoreGoogleSession()).then(restoreNativePlayerReference);
+    void restoreGoogleSession().then(restoreNativePlayerReference);
   bindTrackListScroll();
   seekControlObserver = new MutationObserver(enableSeekControl);
   seekControlObserver.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
@@ -1390,7 +1521,8 @@ watch([currentTrack, isPlaying, filteredTracks], () => void nextTick(updateCurre
 watch([darkMode, developerMode, selectedVisualizer, serpentDensity, serpentDetail, serpentGlow, serpentResolution, volume, isMuted, visualizerSensitivity, visualizerSmoothing, visualizerIntensity, visualizerMotion, mascotBassSensitivity, mascotBassDistance, bassMinHz, bassMaxHz, energyMinHz, energyMaxHz, voiceMinHz, voiceMaxHz, motionMinHz, motionMaxHz], saveUserSettings);
 watch(canRevealActivePlaylistTracks, (revealed) => document.body.classList.toggle('playlist-is-loading', !revealed), { immediate: true });
 watch(developerMode, (enabled) => document.body.classList.toggle('developer-mode', enabled), { immediate: true });
-watch([screen, developerMode], updateLogsPolling);
+watch([logsOpen, developerMode], updateLogsPolling);
+watch(screen, (value) => { if (value === 'libraries') void refreshOrphans(); });
 onBeforeUnmount(() => {
   document.removeEventListener('click', handlePlayerBackgroundClick);
   window.removeEventListener('vibedeck:select-visualizer', handleVisualizerSelection);
@@ -1412,40 +1544,32 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['app-shell', { 'light-theme': !darkMode, 'logs-open': screen === 'logs' }]">
+  <div :class="['app-shell', { 'light-theme': !darkMode }]">
     <aside class="sidebar">
        <div class="brand"><img class="brand-logo" src="/vibedeck-logo.png" alt="VibeDeck" /></div>
       <nav class="main-nav" aria-label="Navegacao principal"><button :class="['nav-item', { active: screen === 'home' }]" @click="screen = 'home'"><span>⌂</span> Inicio</button><button :class="['nav-item', { active: screen === 'libraries' }]" @click="screen = 'libraries'"><span>▱</span> Fontes</button></nav>
       <div class="source-section"><div class="section-label">FONTES</div><button v-for="library in libraryCards" :key="library.id" :class="['source-item', { active: screen === 'playlist' && selectedPlaylistId === library.id }]" @click="library.id === 'local' ? openPlaylist('local') : (screen = 'libraries')" @dragenter.prevent="dropTarget = library.id" @dragover.prevent="dropTarget = library.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event, library.id)"><span class="source-dot" :style="{ background: library.accent }"></span>{{ library.name }}</button></div>
-      <div class="playlist-section"><div class="section-label">PLAYLISTS</div><button v-for="playlist in playlists" :key="playlist.id" :class="['playlist-item', { active: screen === 'playlist' && selectedPlaylistId === playlist.id, 'drop-target-item': dropTarget === playlist.id }]" @click="openPlaylist(playlist.id)" @dragenter.prevent="dropTarget = playlist.id" @dragover.prevent="dropTarget = playlist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event, playlist.id)"><span>♫</span>{{ playlist.name }}<span class="playlist-gear" aria-label="Configurar playlist" @click.stop="openPlaylistSettings(playlist)">⚙</span></button></div>
+      <div v-for="section in sidebarSections" v-show="section.items.length" :key="section.label" class="playlist-section"><div class="section-label">{{ section.label }}</div><button v-for="playlist in section.items" :key="playlist.id" :class="['playlist-item', { active: screen === 'playlist' && selectedPlaylistId === playlist.id, 'drop-target-item': dropTarget === playlist.id }]" @click="openPlaylist(playlist.id)" @dragenter.prevent="dropTarget = playlist.id" @dragover.prevent="dropTarget = playlist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event, playlist.id)"><span>{{ section.icon }}</span>{{ playlist.name }}<span v-if="section.gear" class="playlist-gear" aria-label="Configurar playlist" @click.stop="openPlaylistSettings(playlist)">⚙</span></button></div>
       <div class="sidebar-footer"></div>
     </aside>
 
       <main class="content"><header class="topbar"><label class="search-box"><span>⌕</span><input v-model="query" :placeholder="screen === 'playlist' ? 'Buscar nesta playlist' : 'Buscar em suas bibliotecas'" @keydown.enter="searchLibrary" /></label><button v-if="developerMode" class="settings header-settings header-logs" @click="openLogs">≣ Logs</button><button class="settings header-settings" @click="settingsOpen = true">⚙ Configurações</button><AccountMenu :connected="googleConnected" @connect="void syncGoogle()" @disconnect="void disconnectGoogle()" /></header>
       <template v-if="screen === 'libraries'">
-        <section class="hero"><div><p class="eyebrow">SEU ACERVO</p><h1>Fontes</h1><p class="hero-copy">Suas fontes ficam separadas aqui. As faixas podem se encontrar nas playlists.</p></div><div class="hero-orbit"><span></span><span></span><span></span></div></section>
-        <section class="library-section"><div class="section-heading"><div><p class="eyebrow">VISÃO GERAL</p><h2>Suas fontes estão no menu lateral</h2></div></div></section>
-      </template>
-      <template v-else-if="screen === 'logs'">
-        <section class="hero logs-hero"><div><p class="eyebrow">DIAGNÓSTICO EM TEMPO REAL</p><h1>Logs do VibeDeck</h1><p class="hero-copy">Acompanhe janelas visíveis e invisíveis, brokers, sessão, playlists, streams e áudio sem sair do app.</p></div></section>
-        <section class="logs-panel">
-          <div class="logs-toolbar"><label class="log-search"><span>⌕</span><input v-model="logSearch" placeholder="Filtrar por mensagem, janela ou operação" /></label><select v-model="logLevelFilter"><option value="all">Todos níveis</option><option value="info">Info</option><option value="error">Erros</option></select><select v-model="logSourceFilter"><option value="all">Todas fontes</option><option v-for="source in logSources" :key="source" :value="source">{{ source }}</option></select><button @click="exportLogs">Exportar</button><button @click="clearLogs">Limpar</button></div>
-          <div class="log-stats"><span><strong>{{ appLogs.length }}</strong> eventos</span><span><strong>{{ filteredLogs.length }}</strong> visíveis</span><span><strong>{{ appLogs.filter((entry) => entry.level === 'error').length }}</strong> erros</span></div>
-          <div class="log-list" aria-live="polite"><article v-for="entry in filteredLogs" :key="entry.id" :class="['log-entry', entry.level]"><time>{{ formatLogTime(entry.timestamp) }}</time><span class="log-level">{{ entry.level }}</span><span class="log-source">{{ entry.source }}</span><span class="log-operation">{{ entry.operation }}</span><span class="log-window">{{ entry.window ?? 'main/native' }}</span><p>{{ entry.message }}</p></article><div v-if="!filteredLogs.length" class="empty-state"><strong>Nenhum log para estes filtros</strong><span>Execute uma ação no app para ver os eventos chegarem em tempo real.</span></div></div>
-          <section class="webviews-panel"><div class="webviews-heading"><div><p class="eyebrow">WEBVIEWS</p><strong>Janelas e brokers ativos</strong></div><button @click="refreshAppWebviews">Atualizar</button></div><div class="webview-list"><article v-for="webview in appWebviews" :key="webview.label" class="webview-row"><span :class="['webview-status', { visible: webview.visible }]"></span><span><strong>{{ webview.name }}</strong><small>{{ webview.label }}</small></span><span class="webview-kind">{{ webview.internal ? 'Interna' : 'Aplicativo' }}</span><span :class="['webview-visibility', { visible: webview.visible }]">{{ webview.visible ? 'Visível' : 'Invisível' }}</span><button v-if="webview.internal" :disabled="changingWebviewLabel === webview.label" @click="toggleWebviewVisibility(webview)">{{ changingWebviewLabel === webview.label ? 'Alterando...' : webview.visible ? 'Ocultar' : 'Mostrar' }}</button></article><div v-if="!appWebviews.length" class="empty-state"><strong>Nenhuma WebView ativa</strong><span>As janelas aparecerão aqui quando forem criadas.</span></div></div></section>
-        </section>
+        <section class="hero"><div><p class="eyebrow">SEU ACERVO</p><h1>Fontes</h1><p class="hero-copy">Gerencie bibliotecas locais, favoritos e a conta do YouTube Music.</p></div><div class="hero-orbit"><span></span><span></span><span></span></div></section>
+        
       </template>
        <template v-else-if="screen === 'playlist'">
-        <section class="hero"><div><p class="eyebrow">PLAYLIST {{ sourceLabel(activePlaylist.source).toUpperCase() }}</p><h1>{{ activePlaylist.name }}</h1><p class="hero-copy">{{ isActivePlaylistLoading ? 'Carregando faixas do YouTube Music...' : activePlaylist.tracks.length ? `${activePlaylist.tracks.length} faixas nesta fila.` : 'Esta playlist ainda está vazia.' }}</p></div><div class="hero-orbit"><span></span><span></span><span></span></div></section>
+        <section class="hero"><div><p class="eyebrow">PLAYLIST {{ sourceLabel(activePlaylist.source).toUpperCase() }}</p><h1>{{ activePlaylist.name }}</h1><p class="hero-copy">{{ isActivePlaylistLoading ? 'Carregando faixas do YouTube Music...' : activePlaylist.tracks.length ? `${activePlaylist.tracks.length} faixas nesta fila.` : 'Esta playlist ainda está vazia.' }}</p><div v-if="activeLocalLibrary" class="hero-actions"><button type="button" @click="hubImportFiles(activeLocalLibrary.id)">Importar arquivos</button><button type="button" @click="libraryManager?.openFolderImport(activeLocalLibrary.id)">Importar pasta</button><button type="button" @click="libraryManager?.openRename(activeLocalLibrary.id)">Renomear</button><button type="button" class="danger" @click="libraryManager?.openDelete(activeLocalLibrary.id)">Excluir</button></div></div><div class="hero-orbit"><span></span><span></span><span></span></div></section>
           <div v-if="localLibraryLoading && activePlaylist.source === 'local'" class="empty-state playlist-loading" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Carregando biblioteca local</strong><span>Consultando o catálogo nativo...</span></div>
           <div v-else-if="localLibraryError && activePlaylist.source === 'local'" class="empty-state local-library-error" role="alert"><strong>Biblioteca local indisponível</strong><span>{{ localLibraryError }}</span><button @click="loadLocalLibrary">Tentar novamente</button></div>
           <div v-if="isActivePlaylistLoading" class="empty-state playlist-loading" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><strong>Carregando {{ activePlaylist.name }}</strong><span>Buscando as faixas no YouTube Music...</span></div>
           <div v-if="localImport" class="local-import-status" role="status" aria-live="polite"><strong>{{ localImport.cancelled ? 'Cancelando importação...' : 'Importando arquivos locais' }}</strong><span>{{ localImport.processed }} de {{ localImport.total }} processados{{ localImport.currentPath ? ` · ${localImport.currentPath}` : '' }}</span><progress :max="Math.max(localImport.total, 1)" :value="localImport.processed"></progress><button :disabled="localImport.cancelled" @click="cancelLocalImport">Cancelar</button><small v-if="localImport.files.length">{{ summarizeImport(localImport.files).imported }} importada(s) · {{ summarizeImport(localImport.files).duplicates }} duplicata(s) · {{ summarizeImport(localImport.files).unsupported }} não suportada(s) · {{ summarizeImport(localImport.files).failed }} falha(s)</small></div>
            <Serpents3D v-if="selectedVisualizer === 'serpents'" class="playlist-visualizer" :levels="visualizerLevels" :active="isPlaying" :has-track="Boolean(currentTrack)" :density="serpentDensity" :detail="serpentDetail" :glow="serpentGlow" :resolution="serpentResolution" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" />
            <VisualizerCanvas v-else class="playlist-visualizer" :kind="selectedVisualizer" :levels="visualizerLevels" :active="isPlaying" :has-track="Boolean(currentTrack)" :serpent-density="serpentDensity" :serpent-detail="serpentDetail" :serpent-glow="serpentGlow" :sensitivity="visualizerSensitivity" :smoothing="visualizerSmoothing" :intensity="visualizerIntensity" :motion="visualizerMotion" :bass-sensitivity="mascotBassSensitivity" :bass-distance="mascotBassDistance" :bass-min-hz="bassMinHz" :bass-max-hz="bassMaxHz" :energy-min-hz="energyMinHz" :energy-max-hz="energyMaxHz" :voice-min-hz="voiceMinHz" :voice-max-hz="voiceMaxHz" :motion-min-hz="motionMinHz" :motion-max-hz="motionMaxHz" compact />
-          <section class="library-section"><div class="section-heading"><div><p class="eyebrow">FAIXAS · {{ sourceLabel(activePlaylist.mode) }}</p><h2>{{ query ? 'Resultados da busca' : activePlaylist.name }}</h2></div><button v-if="activePlaylist.id !== 'favorites'" class="heading-gear" aria-label="Configurar playlist" @click="openPlaylistSettings(activePlaylist)">⚙</button></div><div class="track-list" @dragenter.prevent="dropTarget = activePlaylist.id" @dragover.prevent="dropTarget = activePlaylist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event)"><div v-for="(item, index) in filteredTracks" :key="`${item.id}-${index}`" class="track-row" role="button" tabindex="0" @click="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.enter="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.space.prevent="play(item, false, false, activePlaylist.tracks.indexOf(item))"><span class="track-index">{{ currentTrack?.id === item.id && isPlaying ? '▶' : String(index + 1).padStart(2, '0') }}</span><button v-if="item.coverUrl" class="cover cover-button" type="button" :aria-label="`Abrir capa de ${item.title}`" @click.stop="openArtwork(item, $event)" @keydown.stop><img :src="item.coverUrl" alt="" draggable="false" /></button><span v-else class="cover cover-fallback" :style="{ background: item.accent }" aria-hidden="true">{{ item.title.slice(0, 1) }}</span><span class="track-info"><strong>{{ item.title }}</strong><small>{{ item.artist }} · {{ item.album }}</small></span><span :class="['origin-badge', item.source]"><i></i>{{ sourceLabel(item.source) }}</span><button class="favorite-button" :aria-label="isFavorite(item) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'" @click.stop="toggleFavorite(item)">{{ isFavorite(item) ? '♥' : '♡' }}</button><span class="duration">{{ item.durationSeconds ? formatTime(item.durationSeconds) : item.duration }}</span></div><div v-if="!filteredTracks.length" class="empty-state"><strong>Playlist vazia</strong><span>Use a área abaixo para adicionar músicas locais.</span></div><MusicPickerMenu v-if="activePlaylist.allowLocal" :class="{ 'drop-target': dropTarget === activePlaylist.id }" @select="handlePickerSelection" /></div></section>
+          <section class="library-section"><div class="section-heading"><div><p class="eyebrow">FAIXAS · {{ sourceLabel(activePlaylist.mode) }}</p><h2>{{ query ? 'Resultados da busca' : activePlaylist.name }}</h2></div><button v-if="!isFavoritesPlaylistId(activePlaylist.id)" class="heading-gear" aria-label="Configurar playlist" @click="openPlaylistSettings(activePlaylist)">⚙</button></div><div class="track-list" @dragenter.prevent="dropTarget = activePlaylist.id" @dragover.prevent="dropTarget = activePlaylist.id" @dragleave.prevent="dropTarget = null" @drop.prevent="handleDrop($event)"><div v-for="(item, index) in filteredTracks" :key="`${item.id}-${index}`" :class="['track-row', { 'track-unavailable': isTrackUnavailable(item) }]" :aria-disabled="isTrackUnavailable(item) || undefined" :title="isTrackUnavailable(item) ? unavailableMessage(item) : undefined" role="button" tabindex="0" @click="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.enter="play(item, false, false, activePlaylist.tracks.indexOf(item))" @keydown.space.prevent="play(item, false, false, activePlaylist.tracks.indexOf(item))"><span class="track-index">{{ currentTrack?.id === item.id && isPlaying ? '▶' : String(index + 1).padStart(2, '0') }}</span><button v-if="item.coverUrl" class="cover cover-button" type="button" :aria-label="`Abrir capa de ${item.title}`" @click.stop="openArtwork(item, $event)" @keydown.stop><img :src="item.coverUrl" alt="" draggable="false" /></button><span v-else class="cover cover-fallback" :style="{ background: item.accent }" aria-hidden="true">{{ item.title.slice(0, 1) }}</span><span class="track-info"><strong>{{ item.title }}</strong><em v-if="isTrackUnavailable(item)" class="unavailable-badge">{{ unavailableLabel(unavailableReasonOf(item)) }}</em><small>{{ item.artist }} · {{ item.album }}</small></span><span :class="['origin-badge', item.source]"><i></i>{{ sourceLabel(item.source) }}</span><button class="favorite-button" :aria-label="isFavorite(item) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'" @click.stop="toggleFavorite(item)">{{ isFavorite(item) ? '♥' : '♡' }}</button><span class="duration">{{ item.durationSeconds ? formatTime(item.durationSeconds) : item.duration }}</span></div><div v-if="!filteredTracks.length" class="empty-state"><strong>Playlist vazia</strong><span>Use a área abaixo para adicionar músicas locais.</span></div><MusicPickerMenu v-if="activePlaylist.allowLocal" :class="{ 'drop-target': dropTarget === activePlaylist.id }" @select="handlePickerSelection" /></div></section>
       </template>
       <section v-else class="hero home-hero"><div><p class="eyebrow">VIBEDECK</p><h1>Seu som, do seu jeito.</h1><p class="hero-copy">Abra uma playlist na lateral para começar.</p></div></section>
+       <LibraryManager ref="libraryManager" :hub="screen === 'libraries'" :libraries="librarySummaries" :favorites="favoriteSummaries" :youtube="youtubeSummary" :orphans="orphanReport" :busy="libraryBusy" @open="openPlaylist" @create="createLibrary" @rename="renameLibrary" @delete="deleteLibrary" @import-files="hubImportFiles" @import-folder="hubImportFolder" @purge="purgeOrphans" />
        <button v-if="currentTrack" class="repeat-control" :class="repeatMode" :title="repeatMode === 'off' ? 'Sem repetição' : repeatMode === 'playlist' ? 'Repetir playlist' : 'Repetir faixa'" @click="cycleRepeatMode"><Repeat :size="16" :stroke-width="1.8" /><span v-if="repeatMode === 'track'" class="repeat-badge">1</span></button></main>
 
      <footer class="player-bar"><div class="now-playing"><span class="mini-cover" :style="{ background: currentTrack?.accent || '#2a2f3a' }">{{ currentTrack?.title.slice(0, 1) || '♪' }}</span><div><strong>{{ currentTrack?.title || 'Nenhuma música selecionada' }}</strong><small>{{ currentTrack?.artist || 'Abra uma playlist para começar' }}</small></div><button :disabled="!currentTrack" :aria-label="currentTrack && isFavorite(currentTrack) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'" @click="currentTrack && toggleFavorite(currentTrack)"><Heart :size="17" :stroke-width="1.8" :fill="currentTrack && isFavorite(currentTrack) ? 'currentColor' : 'none'" /></button></div><div class="player-controls"><div class="control-buttons"><button :disabled="!currentTrack" aria-label="Faixa anterior" @click="moveInQueue(-1)"><SkipBack :size="19" :stroke-width="1.8" /></button><button class="play-button" :disabled="!currentTrack" :aria-label="isPlaying ? 'Pausar' : 'Reproduzir'" @click="togglePlayback"><Pause v-if="isPlaying" :size="18" :stroke-width="2.2" /><Play v-else :size="18" :stroke-width="0" fill="currentColor" /></button><button :disabled="!currentTrack" aria-label="Próxima faixa" @click="moveInQueue(1)"><SkipForward :size="19" :stroke-width="1.8" /></button></div><div class="progress"><input aria-label="Posição da música" type="range" min="0" max="100" :value="progressPercent" :disabled="!currentTrack || usingNativeAudio" :title="usingNativeAudio ? 'Seek nativo ainda não está disponível' : undefined" @input="seek" /></div><div class="time-label"><span>{{ formatTime(currentTime) }}</span><span>{{ formatTime(duration) }}</span></div></div><div class="player-tools"><span class="player-origin"><i :class="currentTrack?.source || 'local'"></i>{{ currentTrack ? sourceLabel(currentTrack.source) : 'Local' }}</span><button class="mute-button" :disabled="!currentTrack" :aria-label="isMuted ? 'Ativar som' : 'Silenciar'" @click="toggleMute"><VolumeX v-if="isMuted" :size="18" :stroke-width="1.8" /><Volume2 v-else :size="18" :stroke-width="1.8" /></button><input v-model.number="volume" aria-label="Volume" class="volume-control" type="range" min="0" max="1" step="0.01" @input="updateVolume" /></div></footer>
@@ -1460,5 +1584,6 @@ onBeforeUnmount(() => {
      <PlaylistLoadingOverlay v-if="isActivePlaylistLoading" />
     <VisualizerTrackArtwork v-if="visualizerOpen" :track="currentTrack" /><TrackArtworkViewer :track="artworkViewerTrack" :origin="artworkViewerOrigin" @close="artworkViewerTrack = null" />
     <VisualizerPicker v-if="settingsOpen && settingsSection === 'visualizer'" v-model="selectedVisualizer" />
+    <LogsDrawer v-if="developerMode" v-model:open="logsOpen" :logs="appLogs" :webviews="appWebviews" :changing-webview-label="changingWebviewLabel" @export="exportLogs" @refresh-webviews="refreshAppWebviews" @toggle-webview="toggleWebviewVisibility" @copied="(count) => showToast(`${count} ${count === 1 ? 'evento copiado' : 'eventos copiados'}`, 'success')" />
    </div>
  </template>

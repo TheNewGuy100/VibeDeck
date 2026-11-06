@@ -29,7 +29,7 @@ describe('TrackArtworkViewer', () => {
     const app = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8');
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
     const viewer = readFileSync(resolve(process.cwd(), 'src/components/TrackArtworkViewer.vue'), 'utf8');
-    expect(app).toMatch(/class="track-row" role="button" tabindex="0" @click="play\(/);
+    expect(app).toMatch(/:class="\['track-row', \{ 'track-unavailable': isTrackUnavailable\(item\) \}\]"[^>]*role="button" tabindex="0" @click="play\(/);
     expect(app).toMatch(/class="cover cover-button" type="button" :aria-label="`Abrir capa de \$\{item\.title\}`" @click\.stop="openArtwork\(item, \$event\)" @keydown\.stop/);
     expect(app).toMatch(/class="favorite-button"[^>]*@click\.stop="toggleFavorite\(item\)"/);
     expect(viewer).toMatch(/\.artwork-viewer-close\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*center;[^}]*align-items:\s*center;[^}]*line-height:\s*1rem;/);

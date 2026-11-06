@@ -63,7 +63,13 @@ export interface LocalImportFileResult {
 
 export interface ImportLocalPathsRequest {
   paths: string[];
-  playlistName: string;
+  /** Library that receives loose files when `libraryId` is absent (created on demand). */
+  playlistName?: string;
+  libraryId?: string;
+  /** A picked folder becomes a library named after the folder. */
+  folderLibraries?: boolean;
+  /** With `folderLibraries`, each subfolder becomes its own library instead of being flattened. */
+  subfoldersAsLibraries?: boolean;
   operationId: string;
 }
 
@@ -85,6 +91,24 @@ export interface LocalImportProgress {
 export interface RemoveLocalTrackResult {
   catalog: LocalLibraryCatalog;
   removed: boolean;
+}
+
+export interface LibraryMutationResult {
+  catalog: LocalLibraryCatalog;
+  libraryId: string | null;
+  changed: number;
+}
+
+export interface OrphanReport {
+  count: number;
+  bytes: number;
+  trackIds: string[];
+}
+
+export interface PurgeOrphansResult {
+  removedCount: number;
+  freedBytes: number;
+  catalog: LocalLibraryCatalog;
 }
 
 export interface LocalPlaybackReference {

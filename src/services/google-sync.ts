@@ -6,6 +6,8 @@ import { decryptSecureRecord, encryptSecureRecord } from './secure-storage';
 import type { PaginationPage } from './playlist-loader';
 import type { NativeAudioPlaybackDiagnostic, NativeSeekRequest, NativePlayerActivation, PlayerSnapshot, PlayerStateEvent, RepeatModeRequest, VolumeIntent } from '../interfaces/player';
 import { bridgeErrorMessage } from '../interfaces/bridge';
+import { writeAppLog } from './app-logs';
+import { loginErrorCode, waitForLogin, YouTubeLoginError, type LoginEvent } from './youtube-login';
 import { isPlayerStateEvent, parsePlayerSnapshot } from '../interfaces/player';
 import { parseAnalyzerSnapshot } from '../interfaces/visualizer';
 
@@ -105,15 +107,27 @@ export class GoogleSyncService {
       this.youtubeSession = true;
       return;
     }
-    await invoke('open_youtube_login');
-    for (let attempt = 0; attempt < 300; attempt += 1) {
-      if (await invoke<boolean>('capture_youtube_session')) {
-        this.youtubeSession = true;
-        return;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const correlationId = `youtube-login-${Date.now()}`;
+    const log = (message: string, level?: 'info' | 'error') => { void writeAppLog({ message, operation: 'auth', correlationId, level }); };
+    const started = Date.now();
+    log(`youtube login started: forced=${forceLogin}`);
+    try {
+      await invoke('open_youtube_login');
+    } catch (error) {
+      const code = loginErrorCode(error);
+      log(`youtube login failed: stage=open, code=${code}`, 'error');
+      throw new YouTubeLoginError(code);
     }
-    throw new Error('Tempo limite aguardando o login no YouTube Music.');
+    log('youtube login window opened, waiting for sign-in');
+    await waitForLogin(() => invoke<boolean>('capture_youtube_session'), {
+      onEvent: (event: LoginEvent) => {
+        if (event.kind === 'transient') log(`youtube login window not ready, retry: code=${event.code}, streak=${event.streak}`);
+        else if (event.kind === 'waiting') log(`youtube login still waiting: elapsed=${event.elapsedSeconds}s`);
+        else if (event.kind === 'connected') log(`youtube login connected: checks=${event.attempts}, elapsed=${Math.round((Date.now() - started) / 1000)}s`);
+        else log(`youtube login failed: stage=wait, code=${event.code}, elapsed=${Math.round((Date.now() - started) / 1000)}s`, 'error');
+      },
+    });
+    this.youtubeSession = true;
   }
 
   async restoreYouTubeSession() {

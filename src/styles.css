@@ -222,3 +222,7 @@ body.playlist-is-loading .track-list > .playlist-drop-hint { display: none; }
 .picker-menu-root.drop-target .playlist-drop-hint { border-color: #b9f36b; background: #1b281c; }
 .account-popover button, .picker-popover button { width: 100%; padding: 9px 11px; border-radius: 6px; color: #dce2ec; background: transparent; text-align: left; font-size: 11px; }
 .account-popover button:hover, .picker-popover button:hover, .account-popover button:focus-visible, .picker-popover button:focus-visible { color: #b9f36b; background: #20271f; outline: none; }
+.track-row.track-unavailable { cursor: not-allowed; }
+.track-row.track-unavailable .track-info, .track-row.track-unavailable .cover, .track-row.track-unavailable .duration { opacity: .5; }
+.track-row.track-unavailable:hover { background: transparent; }
+.unavailable-badge { margin-left: 8px; padding: 2px 7px; border-radius: 999px; color: #f3c96b; background: #2b2412; font-size: 9px; font-style: normal; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; vertical-align: middle; opacity: 1; }

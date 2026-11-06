@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import type { LibraryItem, Playlist } from '../models/library';
 import type { NativePlayerActivation, PlayerSnapshot } from '../interfaces/player';
-import type { ImportLocalPathsRequest, ImportLocalPathsResult, LoadLocalLibraryResult, LocalImportFileResult, LocalImportProgress, LocalLibraryCatalog, LocalLibraryPlaylist, ManagedTrackReference, RemoveLocalTrackResult } from '../interfaces/library';
+import type { ImportLocalPathsRequest, ImportLocalPathsResult, LibraryMutationResult, LoadLocalLibraryResult, LocalImportFileResult, LocalImportProgress, LocalLibraryCatalog, LocalLibraryPlaylist, ManagedTrackReference, OrphanReport, PurgeOrphansResult, RemoveLocalTrackResult } from '../interfaces/library';
 import { normalizeBridgeError } from '../interfaces/bridge';
 
 function createCorrelationId() {
@@ -116,8 +116,34 @@ export class LocalLibraryService {
     return open({ directory, multiple: true, recursive: directory });
   }
 
+  /** Takes the track out of one library. The file stays until the orphan purge. */
   removeTrack(playlistId: string, trackId: string) {
     return invoke<RemoveLocalTrackResult>('remove_local_track', { request: { playlistId, trackId } });
+  }
+
+  createLibrary(name: string) {
+    return invoke<LibraryMutationResult>('create_local_library', { name });
+  }
+
+  renameLibrary(libraryId: string, name: string) {
+    return invoke<LibraryMutationResult>('rename_local_library', { request: { libraryId, name } });
+  }
+
+  /** Removes the library and its references only. Files are kept for the orphan purge. */
+  deleteLibrary(libraryId: string) {
+    return invoke<LibraryMutationResult>('delete_local_library', { libraryId });
+  }
+
+  moveTracks(fromLibraryId: string, toLibraryId: string, trackIds: string[]) {
+    return invoke<LibraryMutationResult>('move_local_tracks', { request: { fromLibraryId, toLibraryId, trackIds } });
+  }
+
+  previewOrphans() {
+    return invoke<OrphanReport>('preview_orphan_tracks');
+  }
+
+  purgeOrphans() {
+    return invoke<PurgeOrphansResult>('purge_orphan_tracks');
   }
 
   async playTrack(trackId: string, managedPath: string | undefined, activation: NativePlayerActivation) {

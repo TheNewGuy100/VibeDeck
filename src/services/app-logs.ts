@@ -1,10 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
 export interface AppLogEntry {
   id: number;
   timestamp: number;
-  level: 'info' | 'error';
+  level: LogLevel;
   source: string;
   window?: string | null;
   operation: string;
@@ -18,7 +20,7 @@ export interface AppLogRequest {
   message: string;
   operation: string;
   correlationId: string;
-  level?: 'info' | 'error';
+  level?: LogLevel;
   code?: string;
   details?: Record<string, unknown>;
 }
@@ -45,10 +47,6 @@ export function getAppLogs() {
 
 export function getYouTubePlaylistDebugState() {
   return invoke<PlaylistBridgeDebugState>('get_youtube_playlist_debug_state');
-}
-
-export function clearAppLogs() {
-  return invoke('clear_app_logs');
 }
 
 export function writeAppLog(request: AppLogRequest) {
