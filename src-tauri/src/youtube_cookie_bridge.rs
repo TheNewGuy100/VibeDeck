@@ -117,7 +117,41 @@ pub(super) async fn capture(window: &tauri::WebviewWindow) -> Result<YouTubeSess
     .await
     .map_err(|_| "youtube_cookie_capture_failed")?
     .map_err(|_| "youtube_cookie_capture_timeout")??;
-    YouTubeSession::from_cookies(cookies, unix_now()?)
+    let result = YouTubeSession::from_cookies(cookies.clone(), unix_now()?);
+    match &result {
+        Err(code) if code == "youtube_session_ambiguous_cookie" => log_conflict_once(window, &cookies),
+        Ok(session) if !session.ignored_ambiguous().is_empty() => log_once(
+            window,
+            &format!(
+                "YouTube login ignored cookies whose copies disagree (not needed for sign-in): {}",
+                session.ignored_ambiguous().join(", ")
+            ),
+        ),
+        _ => {}
+    }
+    result
+}
+
+fn log_conflict_once(window: &tauri::WebviewWindow, cookies: &[ScopedCookie]) {
+    if let Some(detail) = YouTubeSession::describe_conflict(cookies) {
+        log_once(
+            window,
+            &format!("YouTube login cookie conflict (failed to merge): {detail}"),
+        );
+    }
+}
+
+/// The wait polls every second; report a given message only when it changes.
+fn log_once(window: &tauri::WebviewWindow, message: &str) {
+    use std::sync::{Mutex, OnceLock};
+    use tauri::Manager;
+    static LAST: OnceLock<Mutex<String>> = OnceLock::new();
+    if let Ok(mut last) = LAST.get_or_init(|| Mutex::new(String::new())).lock() {
+        if last.as_str() != message {
+            super::write_native_log(window.app_handle(), message);
+            *last = message.to_string();
+        }
+    }
 }
 
 pub(super) async fn restore(

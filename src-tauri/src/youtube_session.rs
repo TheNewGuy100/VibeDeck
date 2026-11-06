@@ -34,6 +34,32 @@ struct Snapshot {
 
 pub(super) struct YouTubeSession {
     cookies: Vec<ScopedCookie>,
+    /// Names (never values) of non-auth cookies dropped because their copies disagreed.
+    ignored_ambiguous: Vec<String>,
+}
+
+/// Cookies that identify the signed-in session. Disagreeing copies of these fail the capture;
+/// disagreeing copies of any other cookie (ads, consent, visitor ids) are dropped instead of
+/// blocking the login, since sending neither is safe and sending a guess is not.
+const AUTH_COOKIE_NAMES: [&str; 14] = [
+    "SAPISID",
+    "APISID",
+    "SID",
+    "HSID",
+    "SSID",
+    "LOGIN_INFO",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PSIDTS",
+    "__Secure-3PSIDTS",
+    "__Secure-1PSIDCC",
+    "__Secure-3PSIDCC",
+];
+
+fn is_auth_cookie_name(name: &str) -> bool {
+    AUTH_COOKIE_NAMES.contains(&name)
 }
 
 impl YouTubeSession {
@@ -64,6 +90,7 @@ impl YouTubeSession {
 
     pub(super) fn from_cookies(cookies: Vec<ScopedCookie>, now: i64) -> Result<Self, String> {
         let mut kept: Vec<ScopedCookie> = Vec::new();
+        let mut conflicted: Vec<ScopedCookie> = Vec::new();
         for mut cookie in cookies {
             cookie.domain = cookie.domain.to_ascii_lowercase();
             if !is_youtube_cookie_domain(&cookie.domain) || cookie.domain.starts_with('.') {
@@ -75,20 +102,81 @@ impl YouTubeSession {
             if cookie.expires_unix.is_some_and(|expiry| expiry <= now) {
                 continue;
             }
-            if let Some(previous) = kept.iter().find(|previous| {
-                previous.name == cookie.name
-                    && previous.domain == cookie.domain
-                    && previous.path == cookie.path
-            }) {
-                // Conflicting duplicate identities have no trustworthy capture order.
-                if previous != &cookie {
-                    return Err("youtube_session_ambiguous_cookie".into());
+            if conflicted.iter().any(|dropped| same_identity(dropped, &cookie)) {
+                continue;
+            }
+            if let Some(index) = kept
+                .iter()
+                .position(|previous| same_identity(previous, &cookie))
+            {
+                // Different values under one identity have no trustworthy capture order.
+                if kept[index].value != cookie.value {
+                    if is_auth_cookie_name(&cookie.name) {
+                        return Err("youtube_session_ambiguous_cookie".into());
+                    }
+                    conflicted.push(kept.remove(index));
+                    continue;
+                }
+                // Copies of the same cookie that only differ in expiry or flags (left behind by
+                // earlier sessions) carry the same value: keep the strongest one.
+                if merge_rank(&cookie) > merge_rank(&kept[index]) {
+                    kept[index] = cookie;
                 }
                 continue;
             }
             kept.push(cookie);
         }
-        Ok(Self { cookies: kept })
+        let mut ignored_ambiguous: Vec<String> =
+            conflicted.into_iter().map(|cookie| cookie.name).collect();
+        ignored_ambiguous.sort();
+        ignored_ambiguous.dedup();
+        Ok(Self {
+            cookies: kept,
+            ignored_ambiguous,
+        })
+    }
+
+    /// Names of non-auth cookies left out because their copies disagreed.
+    pub(super) fn ignored_ambiguous(&self) -> &[String] {
+        &self.ignored_ambiguous
+    }
+
+    /// Attributes (never values) of the first pair of cookies that share an identity but differ,
+    /// so a failed capture can say what collided without exposing the session.
+    pub(super) fn describe_conflict(cookies: &[ScopedCookie]) -> Option<String> {
+        let mut normalized: Vec<ScopedCookie> = cookies
+            .iter()
+            .cloned()
+            .map(|mut cookie| {
+                cookie.domain = cookie.domain.to_ascii_lowercase();
+                cookie
+            })
+            .filter(|cookie| is_youtube_cookie_domain(&cookie.domain) && is_auth_cookie_name(&cookie.name))
+            .collect();
+        normalized.dedup_by(|a, b| a == b);
+        let mut pairs = 0;
+        let mut first: Option<String> = None;
+        for (index, a) in normalized.iter().enumerate() {
+            for b in &normalized[index + 1..] {
+                if same_identity(a, b) && a.value != b.value {
+                    pairs += 1;
+                    first.get_or_insert_with(|| {
+                        format!(
+                            "name={}, domain={}, path={}, secure={}/{}, same_site_equal={}, value_equal={}, expiry_equal={}",
+                            a.name,
+                            a.domain,
+                            a.path,
+                            a.secure,
+                            b.secure,
+                            a.same_site == b.same_site,
+                            a.value == b.value,
+                            a.expires_unix == b.expires_unix,
+                        )
+                    });
+                }
+            }
+        }
+        first.map(|detail| format!("{detail}, conflicting_pairs={pairs}"))
     }
 
     pub(super) fn load(path: &Path) -> Result<Self, String> {
@@ -286,6 +374,18 @@ fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
         let (key, value) = item.trim().split_once('=')?;
         (key == name && !value.is_empty()).then_some(value)
     })
+}
+
+/// Which of two equal-valued copies to keep: `Secure` first, then the longest lifetime
+/// (a session cookie counts as the longest).
+fn merge_rank(cookie: &ScopedCookie) -> (bool, i64) {
+    (cookie.secure, cookie.expires_unix.unwrap_or(i64::MAX))
+}
+
+/// A domain cookie (`.youtube.com`) and a host-only cookie (`youtube.com`) are different cookies
+/// even with the same name and path, so `host_only` is part of the identity.
+fn same_identity(a: &ScopedCookie, b: &ScopedCookie) -> bool {
+    a.name == b.name && a.domain == b.domain && a.path == b.path && a.host_only == b.host_only
 }
 
 fn valid_cookie(cookie: &ScopedCookie) -> bool {
@@ -566,6 +666,96 @@ mod tests {
         assert!(
             matches!(YouTubeSession::from_cookies(vec![cookie, conflicting], 0), Err(error) if error == "youtube_session_ambiguous_cookie")
         );
+    }
+
+    #[test]
+    fn copies_with_the_same_value_but_different_expiry_merge_into_the_longest_lived_one() {
+        let mut first = session("VISITOR_INFO1_LIVE=same").cookies.remove(0);
+        first.expires_unix = Some(1_000);
+        let mut second = first.clone();
+        second.expires_unix = Some(5_000);
+        let mut third = first.clone();
+        third.expires_unix = Some(3_000);
+        let value = YouTubeSession::from_cookies(vec![first.clone(), second, third], 0).unwrap();
+        assert_eq!(value.cookies.len(), 1);
+        assert_eq!(value.cookies[0].expires_unix, Some(5_000));
+        let mut session_cookie = first.clone();
+        session_cookie.expires_unix = None;
+        let merged = YouTubeSession::from_cookies(vec![first.clone(), session_cookie], 0).unwrap();
+        assert_eq!(merged.cookies[0].expires_unix, None);
+        let mut insecure = first.clone();
+        insecure.secure = false;
+        insecure.expires_unix = Some(9_000);
+        let kept = YouTubeSession::from_cookies(vec![insecure, first], 0).unwrap();
+        assert!(kept.cookies[0].secure, "a Secure copy wins over a longer-lived insecure one");
+    }
+
+    #[test]
+    fn disagreeing_non_auth_cookies_are_dropped_and_do_not_block_the_login() {
+        let auth = session("SAPISID=keep").cookies.remove(0);
+        let mut ynid = auth.clone();
+        ynid.name = "__Secure-YNID".into();
+        ynid.value = "one".into();
+        let mut ynid_other = ynid.clone();
+        ynid_other.value = "two".into();
+        ynid_other.expires_unix = Some(9_000);
+        let mut ynid_third = ynid.clone();
+        ynid_third.value = "one".into();
+        let other = {
+            let mut c = auth.clone();
+            c.name = "PREF".into();
+            c.value = "fine".into();
+            c
+        };
+        let value =
+            YouTubeSession::from_cookies(vec![auth, ynid, other, ynid_other, ynid_third], 0).unwrap();
+        let names: Vec<_> = value.cookies.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["SAPISID", "PREF"]);
+        assert_eq!(value.ignored_ambiguous(), ["__Secure-YNID".to_string()]);
+        assert!(!value.cookie_header_for(PLAYER, 123).unwrap().contains("YNID"));
+    }
+
+    #[test]
+    fn conflict_description_ignores_non_auth_names() {
+        let mut ynid = session("__Secure-YNID=one").cookies.remove(0);
+        ynid.expires_unix = Some(1);
+        let mut other = ynid.clone();
+        other.value = "two".into();
+        assert_eq!(YouTubeSession::describe_conflict(&[ynid, other]), None);
+    }
+
+    #[test]
+    fn equal_valued_copies_are_not_reported_as_a_conflict() {
+        let mut first = session("VISITOR_INFO1_LIVE=same").cookies.remove(0);
+        first.expires_unix = Some(1_000);
+        let mut second = first.clone();
+        second.expires_unix = Some(5_000);
+        assert_eq!(YouTubeSession::describe_conflict(&[first, second]), None);
+    }
+
+    #[test]
+    fn a_domain_cookie_and_a_host_only_cookie_with_the_same_name_are_both_kept() {
+        let domain_cookie = session("PREF=one").cookies.remove(0);
+        let mut host_only = domain_cookie.clone();
+        host_only.host_only = true;
+        host_only.value = "two".into();
+        let value = YouTubeSession::from_cookies(vec![domain_cookie, host_only], 0).unwrap();
+        assert_eq!(value.cookies.len(), 2);
+    }
+
+    #[test]
+    fn conflict_description_names_attributes_but_never_values() {
+        let cookie = session("SAPISID=secret-one").cookies.remove(0);
+        let mut other = cookie.clone();
+        other.value = "secret-two".into();
+        other.secure = false;
+        let detail = YouTubeSession::describe_conflict(&[cookie.clone(), other]).unwrap();
+        assert!(detail.contains("name=SAPISID"));
+        assert!(detail.contains("value_equal=false"));
+        assert!(detail.contains("secure=true/false"));
+        assert!(detail.contains("conflicting_pairs=1"));
+        assert!(!detail.contains("secret"));
+        assert_eq!(YouTubeSession::describe_conflict(&[cookie.clone(), cookie]), None);
     }
 
     #[test]

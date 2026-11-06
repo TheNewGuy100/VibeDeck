@@ -20,6 +20,8 @@ e o catálogo online compartilham fila e saída de áudio Symphonia → PCM → 
 | Coordenador vertical nativo opt-in com ledger persistente | `src-tauri/src/sabr/native_trial.rs` |
 | Fachada de parsers para diagnóstico opt-in, sem executor JS | `tools/bootstrap-inspect/`, feature `bootstrap-inspection` |
 | Catálogo durável | `src-tauri/src/playlist_catalog.rs` |
+| Bibliotecas locais (catálogo v2, blobs, órfãos) | `src-tauri/src/local_library/mod.rs`, `local_library/store.rs` |
+| Favoritos globais | `src-tauri/src/favorites.rs` |
 | UI e ativação da fila | `src/App.vue` |
 | Integração e contratos | `src/services/google-sync.ts`, `src/interfaces/player.ts` |
 | Diagnóstico seguro | `src/services/player-diagnostic.ts` |
@@ -100,3 +102,11 @@ Os adaptadores de produção são reutilizados sem alterar playback ou login nor
 Cargo/binário `vibedeck`. Janela `main` com título VibeDeck; auxiliares
 `youtube-auth`, `youtube-stream-bridge` com títulos prefixados.
 Sem sidecar. WebView2 conserva o processo `msedgewebview2.exe`, controlado pelo runtime.
+
+### Bibliotecas locais e favoritos (D-011, fase 1)
+
+Catálogo v2 em `library/catalog.json`: `tracks` (um item por arquivo) e `libraries` (listas de ids). Os arquivos ficam em `library/blobs/<hash>.<ext>`; uma faixa pode estar em várias bibliotecas com um só arquivo. O catálogo v1 (`playlists/<id>/`) migra sozinho na primeira leitura, movendo os arquivos e deixando o v1 como `catalog.json.previous-*`. A interface continua recebendo `playlists[].tracks[]`.
+
+Excluir biblioteca ou tirar faixa só remove referências. `preview_orphan_tracks` lista o que nenhuma biblioteca nem favorito usa e `purge_orphan_tracks` apaga esses arquivos. Se `favorites.json` estiver ilegível, a limpeza falha em vez de adivinhar. Favoritos (`library/favorites.json`) guardam fonte + id e metadados mínimos; não escrevem na conta do YouTube.
+
+Comandos: `create_local_library`, `rename_local_library`, `delete_local_library`, `move_local_tracks`, `remove_local_track`, `import_local_paths` (com `libraryId`, `folderLibraries`, `subfoldersAsLibraries`), `preview_orphan_tracks`, `purge_orphan_tracks`, `load_favorites`, `set_favorite`.

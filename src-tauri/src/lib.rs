@@ -33,6 +33,7 @@ use windows_sys::Win32::Security::Cryptography::{
 use windows_core::Interface;
 
 mod audio;
+mod favorites;
 mod local_library;
 mod playlist_catalog;
 #[cfg(windows)]
@@ -587,6 +588,18 @@ fn mute_webview(window: &tauri::WebviewWindow) -> Result<(), String> {
     result
 }
 
+/// An explicit level from the caller wins over the message heuristic; unknown values are ignored.
+#[cfg(windows)]
+fn explicit_log_level(requested: Option<&str>, inferred: &'static str) -> &'static str {
+    match requested {
+        Some("debug") => "debug",
+        Some("info") => "info",
+        Some("warn") => "warn",
+        Some("error") => "error",
+        _ => inferred,
+    }
+}
+
 #[cfg(windows)]
 fn classify_log(
     message: &str,
@@ -604,6 +617,18 @@ fn classify_log(
         || lower.contains("tempo limite")
     {
         "error"
+    } else if lower.contains("retry")
+        || lower.contains("fallback")
+        || lower.contains("stale")
+        || lower.contains("skipped")
+        || lower.contains("blocked")
+        || lower.contains("incomplete")
+        || lower.contains("renew")
+    {
+        "warn"
+    } else if lower.contains("snapshot") || lower.contains("hydrated") || lower.contains("rehydrate")
+    {
+        "debug"
     } else {
         "info"
     };
@@ -732,14 +757,6 @@ fn get_youtube_playlist_debug_state() -> PlaylistBridgeDebugState {
 
 #[cfg(windows)]
 #[tauri::command]
-fn clear_app_logs() {
-    if let Ok(mut logs) = APP_LOGS.get_or_init(|| Mutex::new(Vec::new())).lock() {
-        logs.clear();
-    }
-}
-
-#[cfg(windows)]
-#[tauri::command]
 fn write_app_log(app: tauri::AppHandle, request: AppLogRequest) {
     let message = format!("UI {}", request.message);
     let (level, window, _operation, source) = classify_log(&message);
@@ -749,11 +766,7 @@ fn write_app_log(app: tauri::AppHandle, request: AppLogRequest) {
             .duration_since(UNIX_EPOCH)
             .map(|value| value.as_secs())
             .unwrap_or_default(),
-        level: if request.level.as_deref() == Some("error") {
-            "error"
-        } else {
-            level
-        },
+        level: explicit_log_level(request.level.as_deref(), level),
         source,
         window,
         operation: request.operation,
@@ -944,7 +957,10 @@ async fn capture_youtube_session(app: tauri::AppHandle) -> Result<bool, String> 
     use tauri::Manager;
     let window = app
         .get_webview_window("youtube-auth")
-        .ok_or_else(|| "A janela de login do YouTube Music nÃ£o estÃ¡ aberta.".to_string())?;
+        .ok_or_else(|| {
+            write_native_log(&app, "YouTube login failed: login window closed before sign-in");
+            "youtube_login_window_closed".to_string()
+        })?;
     let session = youtube_cookie_bridge::capture(&window).await?;
     if !session.has_auth_cookie(unix_now()?) {
         return Ok(false);
@@ -955,6 +971,7 @@ async fn capture_youtube_session(app: tauri::AppHandle) -> Result<bool, String> 
         .map_err(|error| error.to_string())?
         .join("youtube-session.bin");
     session.save(&path)?;
+    write_native_log(&app, "YouTube login session captured and stored");
     if let Some(window) = app.get_webview_window("youtube-auth") {
         let _ = window.close();
     }
@@ -1000,7 +1017,13 @@ async fn logout_youtube_music(app: tauri::AppHandle) -> Result<(), String> {
             Err(error) => return Err(error.to_string()),
         }
     }
-    write_native_log(&app, "YouTube session and stored credentials cleared");
+    // The cached playlists and tracks belong to the account too: leaving them would show stale
+    // data after sign-out, and the `.bak` copy would even restore them.
+    let removed = playlist_catalog::clear_for_logout(&app)?;
+    write_native_log(
+        &app,
+        &format!("YouTube session and stored credentials cleared, catalog files removed={removed}"),
+    );
     Ok(())
 }
 
@@ -4350,7 +4373,6 @@ fn app_invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         load_youtube_playlist_more_tracks,
         get_youtube_playlist_debug_state,
         get_app_logs,
-        clear_app_logs,
         write_app_log,
         get_app_webviews,
         set_app_webview_visible,
@@ -4373,6 +4395,14 @@ fn app_invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         local_library::import_local_paths,
         local_library::cancel_local_import,
         local_library::remove_local_track,
+        local_library::create_local_library,
+        local_library::rename_local_library,
+        local_library::delete_local_library,
+        local_library::move_local_tracks,
+        local_library::preview_orphan_tracks,
+        local_library::purge_orphan_tracks,
+        favorites::load_favorites,
+        favorites::set_favorite,
         playlist_catalog::load_playlist_catalog,
         playlist_catalog::save_youtube_playlist_page
     ]
@@ -4409,7 +4439,6 @@ fn app_invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         load_youtube_playlist_more_tracks,
         get_youtube_playlist_debug_state,
         get_app_logs,
-        clear_app_logs,
         write_app_log,
         get_app_webviews,
         set_app_webview_visible,
@@ -4432,6 +4461,14 @@ fn app_invoke_handler() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         local_library::import_local_paths,
         local_library::cancel_local_import,
         local_library::remove_local_track,
+        local_library::create_local_library,
+        local_library::rename_local_library,
+        local_library::delete_local_library,
+        local_library::move_local_tracks,
+        local_library::preview_orphan_tracks,
+        local_library::purge_orphan_tracks,
+        favorites::load_favorites,
+        favorites::set_favorite,
         playlist_catalog::load_playlist_catalog,
         playlist_catalog::save_youtube_playlist_page
     ]

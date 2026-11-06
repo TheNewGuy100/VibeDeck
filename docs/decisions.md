@@ -79,3 +79,14 @@ As decisões D-001 a D-004 foram consolidadas de regras existentes.
 
 O modo por faixa de bytes está implementado e integrado como caminho principal atrás da feature `native-range-playback` (módulos `native_range` e `native_range_session`, comandos `play_youtube_audio_native_range` e `is_native_range_available`, seek via `seek_audio`). A interface o tenta primeiro e cai
 no relay se ele não iniciar. O SABR completo continua sem implementação de produção (só sondas de depuração). Android e TV ainda não foram exercitados: o caminho nativo não usa WebView, mas o motor de áudio e a saída (cpal/Symphonia) precisam de revisão por plataforma.
+
+## D-011 — Bibliotecas locais gerenciadas e favoritos globais
+
+- **Estado:** aceita (2026-11-06, acordo com o usuário); só projeto, sem implementação.
+- **Contexto:** o catálogo local (`local_library`, versão 1) só importa para uma playlist por nome e remove faixa; não há criar, renomear ou excluir biblioteca. Favoritos são uma lista em memória no `App.vue` (`favoriteTracks`), sem persistência e misturando fontes.
+- **Decisão:**
+  - **Bibliotecas locais:** catálogo v2 com criar, renomear, excluir e mover faixa. Importar uma pasta cria uma biblioteca com o nome da pasta; arquivos soltos entram na biblioteca escolhida. Tudo é copiado para o domínio do app (pasta gerenciada), com deduplicação por hash.
+  - **Exclusão:** excluir uma biblioteca remove só ela e suas referências. O arquivo físico só é apagado quando nenhuma biblioteca nem favorito o usa, em limpeza confirmada que mostra o espaço liberado.
+  - **Favoritos:** um flag por faixa, guardado como referência (fonte + id) num arquivo nativo. Global é todas; Local e cada fornecedor são filtros da mesma lista. Favoritar não escreve na conta do YouTube.
+- **Consequência:** a interface deixa de ter a lista especial `favorites`; as visões Global, Local e por fornecedor são derivadas. Migração do catálogo v1 para v2 preserva arquivos e faz backup.
+- **Revisão:** após a fase 1 (catálogo v2 e armazenamento de favoritos com testes).

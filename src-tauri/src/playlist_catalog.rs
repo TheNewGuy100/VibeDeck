@@ -63,6 +63,49 @@ pub fn catalog_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Removes the cached playlists and tracks of the account: the catalog, its `.bak` (which
+/// `load_from_path` would otherwise restore), the `.tmp` and every `.corrupt-*` leftover.
+/// Returns how many files were deleted.
+pub fn clear_catalog_files(directory: &Path) -> Result<usize, String> {
+    let _guard = CATALOG_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Playlist catalog lock poisoned".to_string())?;
+    let mut removed = 0;
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_catalog_file = name == "playlist-catalog.json"
+            || name == "playlist-catalog.json.bak"
+            || name == "playlist-catalog.json.tmp"
+            || name.starts_with("playlist-catalog.json.corrupt-");
+        if !is_catalog_file {
+            continue;
+        }
+        match fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(removed)
+}
+
+/// Called on sign-out so no playlist or track of the account stays on disk.
+pub fn clear_for_logout(app: &AppHandle) -> Result<usize, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    clear_catalog_files(&directory)
+}
+
 #[tauri::command]
 pub fn load_playlist_catalog(app: AppHandle) -> Result<PlaylistCatalogSnapshot, String> {
     let path = catalog_path(&app)?;
@@ -339,6 +382,32 @@ mod tests {
         merge_page(&mut catalog, request(2, &[("old", "Old")], false)).unwrap();
         assert_eq!(catalog.playlists[0].generation, 3);
         assert_eq!(catalog.playlists[0].tracks[0]["id"], "new");
+    }
+
+    #[test]
+    fn clearing_removes_the_catalog_and_every_copy_that_could_restore_it() {
+        let root = std::env::temp_dir().join(format!("vibedeck-clear-{}", unique_suffix()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("playlist-catalog.json");
+        let mut catalog = PlaylistCatalog {
+            version: CATALOG_VERSION,
+            playlists: vec![],
+        };
+        merge_page(&mut catalog, request(1, &[("a", "A")], false)).unwrap();
+        save_to_path(&path, &catalog).unwrap();
+        save_to_path(&path, &catalog).unwrap();
+        fs::write(root.join("playlist-catalog.json.corrupt-123"), b"old").unwrap();
+        fs::write(root.join("playlist-catalog.json.tmp"), b"tmp").unwrap();
+        fs::write(root.join("favorites.json"), b"keep").unwrap();
+        fs::write(root.join("youtube-session.bin"), b"other").unwrap();
+
+        assert_eq!(clear_catalog_files(&root).unwrap(), 4);
+        assert!(load_from_path(&path).unwrap().playlists.is_empty());
+        assert!(root.join("favorites.json").exists(), "favourites are app data and stay");
+        assert!(root.join("youtube-session.bin").exists(), "only catalog files are touched here");
+        assert_eq!(clear_catalog_files(&root).unwrap(), 0);
+        assert_eq!(clear_catalog_files(&root.join("missing")).unwrap(), 0);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
