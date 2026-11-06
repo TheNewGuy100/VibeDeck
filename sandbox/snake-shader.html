@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VibeDeck - sandbox do shader da cobra</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0a0a0b; --panel: #15161a; --line: #2a2c33; --text: #e8e8ea; --muted: #9a9ca6; --accent: #ff5f55; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+    #panel { position: fixed; top: 12px; left: 12px; width: 300px; max-height: calc(100vh - 24px); overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: .02em; }
+    fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 8px; padding: 8px 10px; }
+    legend { color: var(--muted); padding: 0 4px; }
+    label { display: grid; grid-template-columns: 112px 1fr 44px; align-items: center; gap: 6px; margin: 3px 0; }
+    label.row { grid-template-columns: 1fr; }
+    output { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    input[type=range] { width: 100%; accent-color: var(--accent); }
+    select, button { background: #1e2026; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    .buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+    #status { font-variant-numeric: tabular-nums; color: var(--muted); white-space: pre; margin-top: 6px; }
+    #result { margin-top: 6px; white-space: pre-wrap; }
+    #result.ok { color: #6fdc8c; } #result.bad { color: #ff8a80; }
+    @media (max-width: 640px) { #panel { width: calc(100vw - 24px); } }
+  </style>
+</head>
+<body>
+  <canvas id="view" aria-label="Pré-visualização da cobra"></canvas>
+  <section id="panel">
+    <h1>Shader da cobra</h1>
+    <fieldset><legend>Tempo</legend>
+      <div class="buttons"><button id="play">Pausar</button><button id="beat">Batida</button><button id="test">Testar loop</button></div>
+      <label>Período<input id="period" type="range" min="2" max="20" step="0.5" value="6" /><output></output></label>
+      <label>Fase<input id="phase" type="range" min="0" max="1" step="0.001" value="0" /><output></output></label>
+      <label>Clipe<select id="clip"></select><span></span></label>
+    </fieldset>
+    <fieldset><legend>Textura</legend>
+      <label>Ladrilhos/volta<input id="tiles" type="range" min="1" max="8" step="1" value="2" /><output></output></label>
+      <label>Sentido<select id="flow"><option value="1">cabeça → cauda</option><option value="-1">cauda → cabeça</option></select><span></span></label>
+    </fieldset>
+    <fieldset><legend>Bass</legend>
+      <label>Nível<input id="bass" type="range" min="0" max="1" step="0.01" value="0" /><output></output></label>
+      <label class="row"><span><input id="auto" type="checkbox" checked /> batida automática (120 bpm)</span></label>
+      <label>Ganho de velocidade<input id="speedGain" type="range" min="0" max="2" step="0.05" value="0.6" /><output></output></label>
+      <label>Ganho de inchaço<input id="swellGain" type="range" min="0" max="0.4" step="0.01" value="0.12" /><output></output></label>
+      <label>Pulso<input id="pulseAmp" type="range" min="0" max="0.2" step="0.01" value="0.08" /><output></output></label>
+    </fieldset>
+    <fieldset><legend>Vista</legend>
+      <label class="row"><span><input id="bones" type="checkbox" /> mostrar ossos</span></label>
+      <label class="row"><span><input id="wire" type="checkbox" /> malha em arame</span></label>
+    </fieldset>
+    <div id="status">carregando…</div>
+    <div id="result"></div>
+  </section>
+  <script type="module" src="/sandbox/snake-shader.js"></script>
+</body>
+</html>
